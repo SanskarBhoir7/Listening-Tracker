@@ -10,6 +10,9 @@ import 'dart:async';
 ///
 /// EXPERIMENTAL: The grace period (default 3 minutes) is a placeholder.
 /// Phase 2 should refine this based on real-world usage data.
+@Deprecated(
+  'Deprecated in Phase 3. SessionEngine is now the single source of truth for tracking state and grace timers.',
+)
 class SessionTimer {
   /// Grace period before ending a session after audio stops.
   /// EXPERIMENTAL: 3 minutes is a starting estimate.

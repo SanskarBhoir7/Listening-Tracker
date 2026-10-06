@@ -1,39 +1,54 @@
 import 'dart:async';
 import 'package:flutter/foundation.dart';
+import 'database/database_adapter.dart';
 import 'database/database_helper.dart';
 import 'models/audio_device.dart';
+import 'models/connection_record.dart';
 import 'models/continuous_session.dart';
 import 'models/daily_stats.dart';
 import 'models/listening_session.dart';
+import 'models/tracking_event.dart';
+import 'tracking_state.dart';
 
 /// Central session engine coordinating:
-/// 1. Audio device registry and connection tracking
-/// 2. Device-specific listening sessions (Connected Time, Active Listening, Silent/Paused)
-/// 3. Continuous listening sessions across devices with experimental grace period
-/// 4. Local SQLite persistence and daily metrics aggregation
+/// 1. Bluetooth & external audio device connection tracking (ConnectionRecord)
+/// 2. Audio playback state monitoring (AudioPlaybackState)
+/// 3. Device-specific & continuous listening session lifecycles (ListeningSessionState)
+/// 4. Grace period handling strictly for audio stopping while connected
+/// 5. Database persistence via injectable DatabaseAdapter
 class SessionEngine {
   static const Duration defaultGracePeriod = Duration(minutes: 3);
 
-  final DatabaseHelper _db = DatabaseHelper.instance;
-
+  final DatabaseAdapter _db;
   Duration gracePeriod;
 
-  SessionEngine({this.gracePeriod = defaultGracePeriod});
+  SessionEngine({
+    DatabaseAdapter? database,
+    this.gracePeriod = defaultGracePeriod,
+  }) : _db = database ?? DatabaseHelper.instance;
 
-  // State
+  // Explicit Phase 3 State Machine Enums
+  BluetoothConnectionState _connectionState = BluetoothConnectionState.disconnected;
+  AudioPlaybackState _audioState = AudioPlaybackState.notPlaying;
+  ListeningSessionState _sessionState = ListeningSessionState.idle;
+
+  // Engine control
   bool _isMonitoring = false;
-  bool _isAudioPlaying = false;
+
+  // Active Device & Connections
   AudioDevice? _activeOutputDevice;
   final Map<String, AudioDevice> _connectedDevices = {};
+  ConnectionRecord? _activeConnectionRecord;
 
-  // Active sessions in progress
+  // Active Sessions in progress
   ListeningSession? _currentDeviceSession;
   ContinuousListeningSession? _currentContinuousSession;
 
-  // Timers
+  // Timers & Token Protection
   Timer? _tickerTimer;
   Timer? _gracePeriodTimer;
   DateTime? _gracePeriodStartedAt;
+  int _graceTimerToken = 0;
 
   // Cached history for UI
   List<ListeningSession> _recentDeviceSessions = [];
@@ -42,21 +57,31 @@ class SessionEngine {
   // Callbacks
   VoidCallback? onStateChanged;
   void Function(String message)? onLog;
+  void Function(TrackingEvent event)? onTrackingEvent;
 
-  // Getters
+  // Getters - State Machine
+  BluetoothConnectionState get connectionState => _connectionState;
+  AudioPlaybackState get audioState => _audioState;
+  ListeningSessionState get sessionState => _sessionState;
+
+  // Getters - Phase 2 API Compatibility
   bool get isMonitoring => _isMonitoring;
-  bool get isAudioPlaying => _isAudioPlaying;
+  bool get isAudioPlaying => _audioState == AudioPlaybackState.playing;
   AudioDevice? get activeOutputDevice => _activeOutputDevice;
   List<AudioDevice> get connectedDevicesList => _connectedDevices.values.toList();
+  ConnectionRecord? get activeConnectionRecord => _activeConnectionRecord;
   ListeningSession? get currentDeviceSession => _currentDeviceSession;
   ContinuousListeningSession? get currentContinuousSession => _currentContinuousSession;
-  bool get isInGracePeriod => _gracePeriodTimer != null && _gracePeriodTimer!.isActive;
+
+  bool get isInGracePeriod => _sessionState == ListeningSessionState.gracePeriod;
+
   Duration? get gracePeriodRemaining {
     if (!isInGracePeriod || _gracePeriodStartedAt == null) return null;
     final elapsed = DateTime.now().difference(_gracePeriodStartedAt!);
     final remaining = gracePeriod - elapsed;
     return remaining.isNegative ? Duration.zero : remaining;
   }
+
   List<ListeningSession> get recentDeviceSessions => _recentDeviceSessions;
   DailyStats get todayStats => _todayStats;
 
@@ -69,7 +94,9 @@ class SessionEngine {
   }
 
   String get liveConnectedFormatted {
-    if (_currentDeviceSession != null) {
+    if (_activeConnectionRecord != null) {
+      return ConnectionRecord.formatClock(_activeConnectionRecord!.durationSeconds);
+    } else if (_currentDeviceSession != null) {
       return ListeningSession.formatClock(_currentDeviceSession!.connectedDurationSeconds);
     }
     return '00:00:00';
@@ -85,12 +112,16 @@ class SessionEngine {
   String get liveContinuousFormatted {
     if (_currentContinuousSession != null) {
       return ListeningSession.formatClock(
-          _currentContinuousSession!.activeListeningDurationSeconds);
+        _currentContinuousSession!.activeListeningDurationSeconds,
+      );
     }
     return '00:00:00';
   }
 
-  /// Initialize and load stored history
+  // =========================================================================
+  // Initialization & Engine Lifecycle
+  // =========================================================================
+
   Future<void> initialize() async {
     await refreshHistory();
   }
@@ -113,27 +144,43 @@ class SessionEngine {
     _stopTicker();
     _cancelGracePeriod();
 
-    // Finalize any active sessions and save
+    final now = DateTime.now();
+
+    // Finalize connection record if active
+    if (_activeConnectionRecord != null) {
+      await _closeConnectionRecord(_activeConnectionRecord!, now);
+      _activeConnectionRecord = null;
+    }
+
+    // Finalize listening session if active
     if (_currentDeviceSession != null) {
-      await _closeDeviceSession(_currentDeviceSession!);
+      await _closeDeviceSession(_currentDeviceSession!, now);
       _currentDeviceSession = null;
     }
+
+    // Finalize continuous session if active
     if (_currentContinuousSession != null) {
-      await _closeContinuousSession(_currentContinuousSession!);
+      await _closeContinuousSession(_currentContinuousSession!, now);
       _currentContinuousSession = null;
     }
 
     _connectedDevices.clear();
     _activeOutputDevice = null;
-    _isAudioPlaying = false;
+    _connectionState = BluetoothConnectionState.disconnected;
+    _audioState = AudioPlaybackState.notPlaying;
+    _sessionState = ListeningSessionState.idle;
 
     await refreshHistory();
     onStateChanged?.call();
   }
 
-  /// Process native state snapshot on refresh or startup
+  // =========================================================================
+  // Native State Snapshot Reconciliation
+  // =========================================================================
+
   Future<void> processStateSnapshot(Map<String, dynamic> state) async {
-    _isAudioPlaying = state['isAudioPlaying'] as bool? ?? false;
+    final isPlaying = state['isAudioPlaying'] as bool? ?? false;
+    _audioState = isPlaying ? AudioPlaybackState.playing : AudioPlaybackState.notPlaying;
 
     final connectedList = state['connectedDevices'] as List? ?? [];
     final now = DateTime.now();
@@ -169,7 +216,7 @@ class SessionEngine {
       }
     }
 
-    // Remove any no longer connected
+    // Remove devices no longer reported
     _connectedDevices.removeWhere((id, _) => !currentIds.contains(id));
 
     // Determine active output device
@@ -184,7 +231,8 @@ class SessionEngine {
         connectionType: outConn,
         address: outAddr,
       );
-      _activeOutputDevice = _connectedDevices[stableId] ??
+
+      final device = _connectedDevices[stableId] ??
           AudioDevice(
             id: stableId,
             name: outName,
@@ -194,32 +242,80 @@ class SessionEngine {
             firstSeen: now,
             lastSeen: now,
           );
-      _syncDeviceSession();
-    } else {
-      _activeOutputDevice = null;
-      if (_currentDeviceSession != null) {
-        await _closeDeviceSession(_currentDeviceSession!);
-        _currentDeviceSession = null;
+
+      _activeOutputDevice = device;
+      _connectionState = BluetoothConnectionState.connected;
+
+      // Ensure connection record exists
+      if (_activeConnectionRecord == null || _activeConnectionRecord!.deviceId != stableId) {
+        if (_activeConnectionRecord != null) {
+          await _closeConnectionRecord(_activeConnectionRecord!, now);
+        }
+        await _startConnectionRecord(device, now);
       }
+
+      // Reconcile listening session:
+      // Start listening ONLY if audio is actually playing
+      if (isPlaying) {
+        if (_sessionState != ListeningSessionState.active ||
+            _currentDeviceSession == null ||
+            _currentDeviceSession!.deviceId != stableId) {
+          if (_currentDeviceSession != null) {
+            await _closeDeviceSession(_currentDeviceSession!, now);
+          }
+          await _startListeningSession(device, now);
+        }
+      } else {
+        // Not playing: if we were not already in a valid grace period for this device, stay idle
+        if (_sessionState == ListeningSessionState.active) {
+          _sessionState = ListeningSessionState.gracePeriod;
+          _startGracePeriod();
+        }
+      }
+    } else {
+      // Switched to internal speaker or disconnected
+      if (_activeOutputDevice != null) {
+        // Only finalize if we actually had an active output before
+        if (_activeConnectionRecord != null) {
+          await _closeConnectionRecord(_activeConnectionRecord!, now);
+          _activeConnectionRecord = null;
+        }
+        if (_currentDeviceSession != null) {
+          await _closeDeviceSession(_currentDeviceSession!, now);
+          _currentDeviceSession = null;
+        }
+        if (_currentContinuousSession != null) {
+          await _closeContinuousSession(_currentContinuousSession!, now);
+          _currentContinuousSession = null;
+        }
+        _cancelGracePeriod();
+      }
+      _activeOutputDevice = null;
+      _connectionState = _connectedDevices.isNotEmpty
+          ? BluetoothConnectionState.connected
+          : BluetoothConnectionState.disconnected;
+      _sessionState = ListeningSessionState.idle;
     }
 
     onStateChanged?.call();
   }
 
-  /// Handle incoming event from native Android layer
+  // =========================================================================
+  // Native Event Handler (State Machine Transitions)
+  // =========================================================================
+
   Future<void> handleNativeEvent(Map<String, dynamic> event) async {
     final type = event['type'] as String? ?? 'UNKNOWN';
     final deviceName = event['deviceName'] as String?;
     final deviceType = event['deviceType'] as String?;
     final connectionType = event['connectionType'] as String?;
     final deviceAddress = event['deviceAddress'] as String?;
-    final isPlaying = event['isAudioPlaying'] as bool?;
 
     final now = DateTime.now();
 
     switch (type) {
       case 'DEVICE_CONNECTED':
-        if (deviceName != null && connectionType != null) {
+        if (deviceName != null && connectionType != null && connectionType != 'internal') {
           final stableId = AudioDevice.generateStableId(
             name: deviceName,
             connectionType: connectionType,
@@ -240,10 +336,40 @@ class SessionEngine {
           _connectedDevices[stableId] = device;
           await _db.upsertDevice(device);
 
-          // If this is our primary or first trackable device, make it active output
+          _connectionState = BluetoothConnectionState.connected;
+          _emitTrackingEvent(
+            eventType: 'BT_CONNECTED',
+            deviceId: stableId,
+            deviceName: deviceName,
+            deviceType: device.deviceType,
+          );
+
+          // Make active output if primary or bluetooth
           if (_activeOutputDevice == null || connectionType == 'bluetooth') {
+            final isDeviceSwitch = _activeOutputDevice != null && _activeOutputDevice!.id != stableId;
+            if (isDeviceSwitch && _activeConnectionRecord != null) {
+              await _closeConnectionRecord(_activeConnectionRecord!, now);
+            }
+
             _activeOutputDevice = device;
-            _syncDeviceSession();
+
+            // Invariant 10: Do NOT create duplicate connection record for duplicate event
+            if (_activeConnectionRecord == null || _activeConnectionRecord!.deviceId != stableId) {
+              await _startConnectionRecord(device, now);
+            }
+
+            // Invariant 1 & 2: Bluetooth connected does NOT start listening unless audio is playing!
+            if (_audioState == AudioPlaybackState.playing) {
+              if (_currentDeviceSession == null || _currentDeviceSession!.deviceId != stableId) {
+                if (_currentDeviceSession != null) {
+                  await _closeDeviceSession(_currentDeviceSession!, now);
+                }
+                await _startListeningSession(device, now);
+              }
+            } else {
+              // Audio is NOT playing -> remain IDLE!
+              _sessionState = ListeningSessionState.idle;
+            }
           }
         }
         break;
@@ -258,33 +384,59 @@ class SessionEngine {
 
           _connectedDevices.remove(stableId);
 
-          // If the disconnected device had an active session, close and save it!
-          if (_currentDeviceSession != null &&
-              _currentDeviceSession!.deviceId == stableId) {
-            await _closeDeviceSession(_currentDeviceSession!);
-            _currentDeviceSession = null;
-            onLog?.call('PERSISTED_SESSION | $deviceName');
-          }
+          _emitTrackingEvent(
+            eventType: 'BT_DISCONNECTED',
+            deviceId: stableId,
+            deviceName: deviceName,
+            deviceType: deviceType,
+          );
 
-          // Check if another device is still connected
-          if (_connectedDevices.isNotEmpty) {
-            _activeOutputDevice = _connectedDevices.values.first;
-            _syncDeviceSession();
-          } else {
-            _activeOutputDevice = null;
-          }
+          // If the disconnected device was our active connection:
+          if (_activeOutputDevice != null && _activeOutputDevice!.id == stableId) {
+            // Invariant 5 & 8: End ConnectionRecord immediately!
+            if (_activeConnectionRecord != null) {
+              await _closeConnectionRecord(_activeConnectionRecord!, now);
+              _activeConnectionRecord = null;
+            }
 
-          // Disconnect triggers grace period for continuous session
-          if (_currentContinuousSession != null) {
-            _startGracePeriod();
+            // Invariant 5: End listening immediately! DO NOT start/use 3-minute grace timer.
+            _cancelGracePeriod();
+
+            if (_currentDeviceSession != null) {
+              await _closeDeviceSession(_currentDeviceSession!, now);
+              _currentDeviceSession = null;
+            }
+
+            if (_currentContinuousSession != null) {
+              await _closeContinuousSession(_currentContinuousSession!, now);
+              _currentContinuousSession = null;
+            }
+
+            _sessionState = ListeningSessionState.idle;
+
+            // Check if another trackable device remains connected
+            if (_connectedDevices.isNotEmpty) {
+              _activeOutputDevice = _connectedDevices.values.first;
+              _connectionState = BluetoothConnectionState.connected;
+              await _startConnectionRecord(_activeOutputDevice!, now);
+
+              // Reconcile listening with remaining device
+              if (_audioState == AudioPlaybackState.playing) {
+                await _startListeningSession(_activeOutputDevice!, now);
+              }
+            } else {
+              _activeOutputDevice = null;
+              _connectionState = BluetoothConnectionState.disconnected;
+            }
           }
         }
         break;
 
       case 'AUDIO_STARTED':
-        _isAudioPlaying = true;
-        _cancelGracePeriod();
+        _audioState = AudioPlaybackState.playing;
+        _emitTrackingEvent(eventType: 'AUDIO_STARTED');
 
+        // Resolve active device if provided in event payload
         if (deviceName != null && connectionType != null && connectionType != 'internal') {
           final stableId = AudioDevice.generateStableId(
             name: deviceName,
@@ -301,55 +453,76 @@ class SessionEngine {
                 firstSeen: now,
                 lastSeen: now,
               );
-          _syncDeviceSession();
+          _connectionState = BluetoothConnectionState.connected;
+
+          if (_activeConnectionRecord == null || _activeConnectionRecord!.deviceId != stableId) {
+            await _startConnectionRecord(_activeOutputDevice!, now);
+          }
         }
 
-        // Handle Continuous Listening Session
-        if (_currentContinuousSession == null) {
-          _currentContinuousSession = ContinuousListeningSession(
-            id: 'cs_${now.millisecondsSinceEpoch}',
-            startedAt: now,
-            activeListeningDurationSeconds: 0,
-            pausedDurationSeconds: 0,
-            deviceIds: _activeOutputDevice != null ? [_activeOutputDevice!.id] : [],
-            deviceNames: _activeOutputDevice != null ? [_activeOutputDevice!.name] : [],
-            status: 'active',
-          );
-        } else {
-          // Add device name if not already listed
-          if (_activeOutputDevice != null &&
-              !_currentContinuousSession!.deviceIds.contains(_activeOutputDevice!.id)) {
-            final updatedIds = List<String>.from(_currentContinuousSession!.deviceIds)
-              ..add(_activeOutputDevice!.id);
-            final updatedNames = List<String>.from(_currentContinuousSession!.deviceNames)
-              ..add(_activeOutputDevice!.name);
-            _currentContinuousSession = _currentContinuousSession!.copyWith(
-              deviceIds: updatedIds,
-              deviceNames: updatedNames,
+        // Only start listening if a trackable external device is connected
+        if (_connectionState == BluetoothConnectionState.connected && _activeOutputDevice != null) {
+          if (_sessionState == ListeningSessionState.idle) {
+            // IDLE -> ACTIVE: Start new session
+            await _startListeningSession(_activeOutputDevice!, now);
+          } else if (_sessionState == ListeningSessionState.gracePeriod) {
+            // GRACE_PERIOD -> ACTIVE: Resume the SAME session!
+            _cancelGracePeriod();
+            _sessionState = ListeningSessionState.active;
+            _emitTrackingEvent(
+              eventType: 'LISTENING_RESUMED',
+              reason: 'Audio resumed within grace period',
             );
+          } else if (_sessionState == ListeningSessionState.active) {
+            // Invariant 11: Ignore duplicate AUDIO_STARTED when already active
+            _cancelGracePeriod();
           }
         }
         break;
 
       case 'AUDIO_STOPPED':
-        _isAudioPlaying = false;
-        // Start experimental grace period for continuous listening session
-        if (_currentContinuousSession != null) {
+        _audioState = AudioPlaybackState.notPlaying;
+        _emitTrackingEvent(eventType: 'AUDIO_STOPPED');
+
+        // ACTIVE -> GRACE_PERIOD: Grace period applies ONLY when audio stops while connected
+        if (_connectionState == BluetoothConnectionState.connected &&
+            _sessionState == ListeningSessionState.active) {
+          _sessionState = ListeningSessionState.gracePeriod;
           _startGracePeriod();
+        } else if (_sessionState == ListeningSessionState.gracePeriod) {
+          // Already in grace period: do not restart timer
+        } else {
+          // Idle remains idle
+          _sessionState = ListeningSessionState.idle;
         }
         break;
 
       case 'AUDIO_OUTPUT_CHANGED':
+        _emitTrackingEvent(
+          eventType: 'OUTPUT_CHANGED',
+          metadata: {'connectionType': connectionType, 'deviceName': deviceName},
+        );
+
         if (connectionType == 'internal' || deviceName == 'Phone Speaker') {
-          // Switched to built-in speaker
+          // Switched to built-in phone speaker
+          if (_activeConnectionRecord != null) {
+            await _closeConnectionRecord(_activeConnectionRecord!, now);
+            _activeConnectionRecord = null;
+          }
           if (_currentDeviceSession != null) {
-            await _closeDeviceSession(_currentDeviceSession!);
+            await _closeDeviceSession(_currentDeviceSession!, now);
             _currentDeviceSession = null;
           }
-          _activeOutputDevice = null;
           if (_currentContinuousSession != null) {
-            _startGracePeriod();
+            await _closeContinuousSession(_currentContinuousSession!, now);
+            _currentContinuousSession = null;
           }
+          _cancelGracePeriod();
+          _activeOutputDevice = null;
+          _connectionState = _connectedDevices.isNotEmpty
+              ? BluetoothConnectionState.connected
+              : BluetoothConnectionState.disconnected;
+          _sessionState = ListeningSessionState.idle;
         } else if (deviceName != null && connectionType != null) {
           final stableId = AudioDevice.generateStableId(
             name: deviceName,
@@ -357,16 +530,19 @@ class SessionEngine {
             address: deviceAddress,
           );
 
-          // If switching from Device A to Device B:
+          // If switching from Device A to Device B
           if (_activeOutputDevice != null && _activeOutputDevice!.id != stableId) {
-            // Close Device A's session
+            if (_activeConnectionRecord != null) {
+              await _closeConnectionRecord(_activeConnectionRecord!, now);
+              _activeConnectionRecord = null;
+            }
             if (_currentDeviceSession != null) {
-              await _closeDeviceSession(_currentDeviceSession!);
+              await _closeDeviceSession(_currentDeviceSession!, now);
               _currentDeviceSession = null;
             }
           }
 
-          _activeOutputDevice = _connectedDevices[stableId] ??
+          final newDevice = _connectedDevices[stableId] ??
               AudioDevice(
                 id: stableId,
                 name: deviceName,
@@ -377,52 +553,217 @@ class SessionEngine {
                 lastSeen: now,
               );
 
-          _syncDeviceSession();
+          _activeOutputDevice = newDevice;
+          _connectionState = BluetoothConnectionState.connected;
 
-          // Continuous session seamlessly continues with Device B!
-          if (_currentContinuousSession != null &&
-              !_currentContinuousSession!.deviceIds.contains(stableId)) {
-            final updatedIds = List<String>.from(_currentContinuousSession!.deviceIds)
-              ..add(stableId);
-            final updatedNames = List<String>.from(_currentContinuousSession!.deviceNames)
-              ..add(deviceName);
-            _currentContinuousSession = _currentContinuousSession!.copyWith(
-              deviceIds: updatedIds,
-              deviceNames: updatedNames,
-            );
+          if (_activeConnectionRecord == null || _activeConnectionRecord!.deviceId != stableId) {
+            await _startConnectionRecord(newDevice, now);
+          }
+
+          // Listening depends strictly on actual audio state
+          if (_audioState == AudioPlaybackState.playing) {
+            await _startListeningSession(newDevice, now);
+          } else {
+            _sessionState = ListeningSessionState.idle;
           }
         }
         break;
-    }
-
-    if (isPlaying != null) {
-      _isAudioPlaying = isPlaying;
     }
 
     await refreshHistory();
     onStateChanged?.call();
   }
 
-  void _syncDeviceSession() {
-    if (_activeOutputDevice == null) return;
+  // =========================================================================
+  // ConnectionRecord & ListeningSession Helpers
+  // =========================================================================
 
-    final now = DateTime.now();
-    if (_currentDeviceSession == null ||
-        _currentDeviceSession!.deviceId != _activeOutputDevice!.id) {
-      _currentDeviceSession = ListeningSession(
-        id: 'ds_${now.millisecondsSinceEpoch}',
-        deviceId: _activeOutputDevice!.id,
-        deviceName: _activeOutputDevice!.name,
-        deviceType: _activeOutputDevice!.deviceType,
-        connectedAt: now,
-        listeningStartedAt: _isAudioPlaying ? now : null,
-        connectedDurationSeconds: 0,
+  Future<void> _startConnectionRecord(AudioDevice device, DateTime now) async {
+    _activeConnectionRecord = ConnectionRecord(
+      id: 'conn_${now.microsecondsSinceEpoch}',
+      deviceId: device.id,
+      deviceName: device.name,
+      deviceType: device.deviceType,
+      connectedAt: now,
+      durationSeconds: 0,
+      status: 'active',
+    );
+    await _db.saveConnectionRecord(_activeConnectionRecord!);
+    _emitTrackingEvent(
+      eventType: 'CONNECTION_STARTED',
+      deviceId: device.id,
+      deviceName: device.name,
+      deviceType: device.deviceType,
+    );
+  }
+
+  Future<void> _closeConnectionRecord(ConnectionRecord record, DateTime now) async {
+    final duration = now.difference(record.connectedAt).inSeconds;
+    final finalized = record.copyWith(
+      disconnectedAt: now,
+      durationSeconds: duration > record.durationSeconds ? duration : record.durationSeconds,
+      status: 'completed',
+    );
+    await _db.saveConnectionRecord(finalized);
+    _emitTrackingEvent(
+      eventType: 'CONNECTION_ENDED',
+      deviceId: record.deviceId,
+      deviceName: record.deviceName,
+      durationSeconds: finalized.durationSeconds,
+    );
+  }
+
+  Future<void> _startListeningSession(AudioDevice device, DateTime now) async {
+    _cancelGracePeriod();
+
+    _currentDeviceSession = ListeningSession(
+      id: 'ds_${DateTime.now().microsecondsSinceEpoch}',
+      deviceId: device.id,
+      deviceName: device.name,
+      deviceType: device.deviceType,
+      connectedAt: _activeConnectionRecord?.connectedAt ?? now,
+      listeningStartedAt: now,
+      connectedDurationSeconds: _activeConnectionRecord?.durationSeconds ?? 0,
+      activeListeningDurationSeconds: 0,
+      silentDurationSeconds: 0,
+      status: 'active',
+    );
+
+    _sessionState = ListeningSessionState.active;
+
+    // Handle Continuous Listening Session
+    if (_currentContinuousSession == null) {
+      _currentContinuousSession = ContinuousListeningSession(
+        id: 'cs_${DateTime.now().microsecondsSinceEpoch}',
+        startedAt: now,
         activeListeningDurationSeconds: 0,
-        silentDurationSeconds: 0,
+        pausedDurationSeconds: 0,
+        deviceIds: [device.id],
+        deviceNames: [device.name],
         status: 'active',
       );
+    } else {
+      if (!_currentContinuousSession!.deviceIds.contains(device.id)) {
+        final updatedIds = List<String>.from(_currentContinuousSession!.deviceIds)..add(device.id);
+        final updatedNames = List<String>.from(_currentContinuousSession!.deviceNames)..add(device.name);
+        _currentContinuousSession = _currentContinuousSession!.copyWith(
+          deviceIds: updatedIds,
+          deviceNames: updatedNames,
+        );
+      }
+    }
+
+    _emitTrackingEvent(
+      eventType: 'LISTENING_STARTED',
+      deviceId: device.id,
+      deviceName: device.name,
+      deviceType: device.deviceType,
+    );
+  }
+
+  Future<void> _closeDeviceSession(ListeningSession session, DateTime now) async {
+    final totalConnected = now.difference(session.connectedAt).inSeconds;
+    final active = session.activeListeningDurationSeconds;
+    final silent = (totalConnected > active) ? (totalConnected - active) : session.silentDurationSeconds;
+
+    final completed = session.copyWith(
+      disconnectedAt: now,
+      listeningEndedAt: now,
+      connectedDurationSeconds: totalConnected > session.connectedDurationSeconds
+          ? totalConnected
+          : session.connectedDurationSeconds,
+      activeListeningDurationSeconds: active,
+      silentDurationSeconds: silent,
+      status: 'completed',
+    );
+
+    await _db.saveDeviceSession(completed);
+    _emitTrackingEvent(
+      eventType: 'LISTENING_ENDED',
+      deviceId: session.deviceId,
+      deviceName: session.deviceName,
+      durationSeconds: active,
+      reason: 'Session finalized',
+    );
+  }
+
+  Future<void> _closeContinuousSession(ContinuousListeningSession session, DateTime now) async {
+    final completed = session.copyWith(
+      endedAt: now,
+      status: 'completed',
+    );
+    await _db.saveContinuousSession(completed);
+  }
+
+  // =========================================================================
+  // Grace Period with Token / Generation Safety
+  // =========================================================================
+
+  void _startGracePeriod() {
+    _cancelGracePeriod();
+
+    final currentToken = ++_graceTimerToken;
+    _gracePeriodStartedAt = DateTime.now();
+
+    _emitTrackingEvent(
+      eventType: 'GRACE_STARTED',
+      reason: 'Audio stopped while connected (waiting up to ${gracePeriod.inSeconds}s)',
+    );
+
+    _gracePeriodTimer = Timer(gracePeriod, () async {
+      // Invariant 6 & Stale Timer Guard: Token must match, session must still be in grace
+      if (_graceTimerToken != currentToken) return;
+      if (_sessionState != ListeningSessionState.gracePeriod) return;
+      if (_connectionState != BluetoothConnectionState.connected) return;
+
+      await _onGraceExpired();
+    });
+  }
+
+  void _cancelGracePeriod() {
+    _graceTimerToken++; // Invalidate any in-flight timers
+    _gracePeriodTimer?.cancel();
+    _gracePeriodTimer = null;
+    _gracePeriodStartedAt = null;
+  }
+
+  Future<void> _onGraceExpired() async {
+    final now = DateTime.now();
+
+    _emitTrackingEvent(
+      eventType: 'GRACE_EXPIRED',
+      reason: 'Grace period expired without audio resuming',
+    );
+
+    _sessionState = ListeningSessionState.idle;
+    _gracePeriodTimer = null;
+    _gracePeriodStartedAt = null;
+
+    if (_currentDeviceSession != null) {
+      await _closeDeviceSession(_currentDeviceSession!, now);
+      _currentDeviceSession = null;
+    }
+
+    if (_currentContinuousSession != null) {
+      await _closeContinuousSession(_currentContinuousSession!, now);
+      _currentContinuousSession = null;
+    }
+
+    await refreshHistory();
+    onStateChanged?.call();
+  }
+
+  /// Exposed for testing to simulate grace period expiration deterministically
+  @visibleForTesting
+  Future<void> triggerGraceExpiredForTesting() async {
+    if (_sessionState == ListeningSessionState.gracePeriod) {
+      await _onGraceExpired();
     }
   }
+
+  // =========================================================================
+  // Ticker Timer & Durations
+  // =========================================================================
 
   void _startTicker() {
     _tickerTimer?.cancel();
@@ -439,13 +780,21 @@ class SessionEngine {
   void _onTick() {
     bool stateChanged = false;
 
-    // Tick active device session
-    if (_currentDeviceSession != null && _activeOutputDevice != null) {
+    // 1. Connection Duration: Increments whenever connected
+    if (_activeConnectionRecord != null) {
+      _activeConnectionRecord = _activeConnectionRecord!.copyWith(
+        durationSeconds: _activeConnectionRecord!.durationSeconds + 1,
+      );
+      stateChanged = true;
+    }
+
+    // 2. Device Session Duration: Tracks listening vs silent
+    if (_currentDeviceSession != null) {
       final newConnected = _currentDeviceSession!.connectedDurationSeconds + 1;
       int newActive = _currentDeviceSession!.activeListeningDurationSeconds;
       int newSilent = _currentDeviceSession!.silentDurationSeconds;
 
-      if (_isAudioPlaying) {
+      if (_sessionState == ListeningSessionState.active && _audioState == AudioPlaybackState.playing) {
         newActive++;
       } else {
         newSilent++;
@@ -459,18 +808,16 @@ class SessionEngine {
       stateChanged = true;
     }
 
-    // Tick continuous session
+    // 3. Continuous Session Duration
     if (_currentContinuousSession != null) {
-      if (_isAudioPlaying) {
-        final newActive =
-            _currentContinuousSession!.activeListeningDurationSeconds + 1;
+      if (_sessionState == ListeningSessionState.active && _audioState == AudioPlaybackState.playing) {
+        final newActive = _currentContinuousSession!.activeListeningDurationSeconds + 1;
         _currentContinuousSession = _currentContinuousSession!.copyWith(
           activeListeningDurationSeconds: newActive,
         );
         stateChanged = true;
-      } else if (isInGracePeriod) {
-        final newPaused =
-            _currentContinuousSession!.pausedDurationSeconds + 1;
+      } else if (_sessionState == ListeningSessionState.gracePeriod) {
+        final newPaused = _currentContinuousSession!.pausedDurationSeconds + 1;
         _currentContinuousSession = _currentContinuousSession!.copyWith(
           pausedDurationSeconds: newPaused,
         );
@@ -483,56 +830,36 @@ class SessionEngine {
     }
   }
 
-  void _startGracePeriod() {
-    _cancelGracePeriod();
-    _gracePeriodStartedAt = DateTime.now();
-    _gracePeriodTimer = Timer(gracePeriod, () async {
-      _gracePeriodTimer = null;
-      _gracePeriodStartedAt = null;
+  // =========================================================================
+  // Structured Event Logging
+  // =========================================================================
 
-      // Grace period expired without audio resuming: end continuous session!
-      if (_currentContinuousSession != null) {
-        await _closeContinuousSession(_currentContinuousSession!);
-        _currentContinuousSession = null;
-        onLog?.call('CONTINUOUS_SESSION_ENDED (Grace period expired)');
-        await refreshHistory();
-        onStateChanged?.call();
-      }
-    });
-  }
-
-  void _cancelGracePeriod() {
-    _gracePeriodTimer?.cancel();
-    _gracePeriodTimer = null;
-    _gracePeriodStartedAt = null;
-  }
-
-  Future<void> _closeDeviceSession(ListeningSession session) async {
-    final now = DateTime.now();
-    final totalConnected = now.difference(session.connectedAt).inSeconds;
-    final active = session.activeListeningDurationSeconds;
-    // Mathematical invariant: connected ≈ active + silent
-    final silent = (totalConnected > active) ? (totalConnected - active) : 0;
-
-    final completed = session.copyWith(
-      disconnectedAt: now,
-      listeningEndedAt: session.listeningStartedAt != null ? now : null,
-      connectedDurationSeconds: totalConnected,
-      activeListeningDurationSeconds: active,
-      silentDurationSeconds: silent,
-      status: 'completed',
+  void _emitTrackingEvent({
+    required String eventType,
+    String? deviceId,
+    String? deviceName,
+    String? deviceType,
+    String? reason,
+    int? durationSeconds,
+    Map<String, dynamic>? metadata,
+  }) {
+    final event = TrackingEvent(
+      id: 'te_${DateTime.now().microsecondsSinceEpoch}',
+      eventType: eventType,
+      timestamp: DateTime.now(),
+      deviceId: deviceId ?? _activeOutputDevice?.id,
+      deviceName: deviceName ?? _activeOutputDevice?.name,
+      deviceType: deviceType ?? _activeOutputDevice?.deviceType,
+      connectionState: _connectionState,
+      audioState: _audioState,
+      sessionState: _sessionState,
+      reason: reason,
+      durationSeconds: durationSeconds,
+      metadata: metadata,
     );
 
-    await _db.saveDeviceSession(completed);
-  }
-
-  Future<void> _closeContinuousSession(ContinuousListeningSession session) async {
-    final now = DateTime.now();
-    final completed = session.copyWith(
-      endedAt: now,
-      status: 'completed',
-    );
-    await _db.saveContinuousSession(completed);
+    onTrackingEvent?.call(event);
+    onLog?.call(event.toString());
   }
 
   void dispose() {

@@ -1,0 +1,201 @@
+import '../models/audio_device.dart';
+import '../models/connection_record.dart';
+import '../models/continuous_session.dart';
+import '../models/daily_stats.dart';
+import '../models/listening_session.dart';
+
+/// Database adapter abstraction for SessionEngine.
+///
+/// Decouples SessionEngine from direct sqflite dependency,
+/// allowing in-memory and mock implementations for deterministic testing.
+abstract class DatabaseAdapter {
+  Future<void> upsertDevice(AudioDevice device);
+  Future<AudioDevice?> getDevice(String id);
+  Future<List<AudioDevice>> getAllDevices();
+
+  Future<void> saveDeviceSession(ListeningSession session);
+  Future<List<ListeningSession>> getRecentDeviceSessions({int limit = 50});
+  Future<List<ListeningSession>> getDeviceSessionsForDay(DateTime day);
+
+  Future<void> saveContinuousSession(ContinuousListeningSession session);
+  Future<List<ContinuousListeningSession>> getRecentContinuousSessions({int limit = 50});
+  Future<List<ContinuousListeningSession>> getContinuousSessionsForDay(DateTime day);
+
+  Future<void> saveConnectionRecord(ConnectionRecord record);
+  Future<ConnectionRecord?> getConnectionRecord(String id);
+  Future<ConnectionRecord?> getActiveConnectionRecord({String? deviceId});
+  Future<List<ConnectionRecord>> getRecentConnectionRecords({int limit = 50});
+  Future<List<ConnectionRecord>> getConnectionRecordsForDay(DateTime day);
+
+  Future<DailyStats> getDailyStats(DateTime day);
+}
+
+/// In-memory implementation of [DatabaseAdapter] for unit tests.
+class InMemoryDatabaseAdapter implements DatabaseAdapter {
+  final Map<String, AudioDevice> devices = {};
+  final List<ListeningSession> deviceSessions = [];
+  final List<ContinuousListeningSession> continuousSessions = [];
+  final List<ConnectionRecord> connectionRecords = [];
+
+  @override
+  Future<void> upsertDevice(AudioDevice device) async {
+    devices[device.id] = device;
+  }
+
+  @override
+  Future<AudioDevice?> getDevice(String id) async {
+    return devices[id];
+  }
+
+  @override
+  Future<List<AudioDevice>> getAllDevices() async {
+    final list = devices.values.toList();
+    list.sort((a, b) => b.lastSeen.compareTo(a.lastSeen));
+    return list;
+  }
+
+  @override
+  Future<void> saveDeviceSession(ListeningSession session) async {
+    final idx = deviceSessions.indexWhere((s) => s.id == session.id);
+    if (idx >= 0) {
+      deviceSessions[idx] = session;
+    } else {
+      deviceSessions.add(session);
+    }
+  }
+
+  @override
+  Future<List<ListeningSession>> getRecentDeviceSessions({int limit = 50}) async {
+    final list = List<ListeningSession>.from(deviceSessions);
+    list.sort((a, b) => b.connectedAt.compareTo(a.connectedAt));
+    return list.take(limit).toList();
+  }
+
+  @override
+  Future<List<ListeningSession>> getDeviceSessionsForDay(DateTime day) async {
+    final startOfDay = DateTime(day.year, day.month, day.day).millisecondsSinceEpoch;
+    final endOfDay = DateTime(day.year, day.month, day.day, 23, 59, 59, 999).millisecondsSinceEpoch;
+    final list = deviceSessions.where((s) {
+      final t = s.connectedAt.millisecondsSinceEpoch;
+      return t >= startOfDay && t <= endOfDay;
+    }).toList();
+    list.sort((a, b) => b.connectedAt.compareTo(a.connectedAt));
+    return list;
+  }
+
+  @override
+  Future<void> saveContinuousSession(ContinuousListeningSession session) async {
+    final idx = continuousSessions.indexWhere((s) => s.id == session.id);
+    if (idx >= 0) {
+      continuousSessions[idx] = session;
+    } else {
+      continuousSessions.add(session);
+    }
+  }
+
+  @override
+  Future<List<ContinuousListeningSession>> getRecentContinuousSessions({int limit = 50}) async {
+    final list = List<ContinuousListeningSession>.from(continuousSessions);
+    list.sort((a, b) => b.startedAt.compareTo(a.startedAt));
+    return list.take(limit).toList();
+  }
+
+  @override
+  Future<List<ContinuousListeningSession>> getContinuousSessionsForDay(DateTime day) async {
+    final startOfDay = DateTime(day.year, day.month, day.day).millisecondsSinceEpoch;
+    final endOfDay = DateTime(day.year, day.month, day.day, 23, 59, 59, 999).millisecondsSinceEpoch;
+    final list = continuousSessions.where((s) {
+      final t = s.startedAt.millisecondsSinceEpoch;
+      return t >= startOfDay && t <= endOfDay;
+    }).toList();
+    list.sort((a, b) => b.startedAt.compareTo(a.startedAt));
+    return list;
+  }
+
+  @override
+  Future<void> saveConnectionRecord(ConnectionRecord record) async {
+    final idx = connectionRecords.indexWhere((r) => r.id == record.id);
+    if (idx >= 0) {
+      connectionRecords[idx] = record;
+    } else {
+      connectionRecords.add(record);
+    }
+  }
+
+  @override
+  Future<ConnectionRecord?> getConnectionRecord(String id) async {
+    final idx = connectionRecords.indexWhere((r) => r.id == id);
+    return idx >= 0 ? connectionRecords[idx] : null;
+  }
+
+  @override
+  Future<ConnectionRecord?> getActiveConnectionRecord({String? deviceId}) async {
+    final list = connectionRecords.where((r) {
+      if (r.status != 'active') return false;
+      if (deviceId != null && r.deviceId != deviceId) return false;
+      return true;
+    }).toList();
+    if (list.isEmpty) return null;
+    list.sort((a, b) => b.connectedAt.compareTo(a.connectedAt));
+    return list.first;
+  }
+
+  @override
+  Future<List<ConnectionRecord>> getRecentConnectionRecords({int limit = 50}) async {
+    final list = List<ConnectionRecord>.from(connectionRecords);
+    list.sort((a, b) => b.connectedAt.compareTo(a.connectedAt));
+    return list.take(limit).toList();
+  }
+
+  @override
+  Future<List<ConnectionRecord>> getConnectionRecordsForDay(DateTime day) async {
+    final startOfDay = DateTime(day.year, day.month, day.day).millisecondsSinceEpoch;
+    final endOfDay = DateTime(day.year, day.month, day.day, 23, 59, 59, 999).millisecondsSinceEpoch;
+    final list = connectionRecords.where((r) {
+      final t = r.connectedAt.millisecondsSinceEpoch;
+      return t >= startOfDay && t <= endOfDay;
+    }).toList();
+    list.sort((a, b) => b.connectedAt.compareTo(a.connectedAt));
+    return list;
+  }
+
+  @override
+  Future<DailyStats> getDailyStats(DateTime day) async {
+    final daySessions = await getDeviceSessionsForDay(day);
+    final dayContinuous = await getContinuousSessionsForDay(day);
+
+    if (daySessions.isEmpty && dayContinuous.isEmpty) {
+      return DailyStats.empty(day);
+    }
+
+    int totalConnected = 0;
+    int totalListening = 0;
+    int totalSilent = 0;
+    final uniqueDeviceIds = <String>{};
+
+    for (final s in daySessions) {
+      totalConnected += s.connectedDurationSeconds;
+      totalListening += s.activeListeningDurationSeconds;
+      totalSilent += s.silentDurationSeconds;
+      uniqueDeviceIds.add(s.deviceId);
+    }
+
+    int longestContinuous = 0;
+    for (final cs in dayContinuous) {
+      if (cs.activeListeningDurationSeconds > longestContinuous) {
+        longestContinuous = cs.activeListeningDurationSeconds;
+      }
+    }
+
+    return DailyStats(
+      date: day,
+      totalConnectedSeconds: totalConnected,
+      totalActiveListeningSeconds: totalListening,
+      totalSilentSeconds: totalSilent,
+      deviceSessionCount: daySessions.length,
+      continuousSessionCount: dayContinuous.length,
+      devicesUsedCount: uniqueDeviceIds.length,
+      longestContinuousSessionSeconds: longestContinuous,
+    );
+  }
+}

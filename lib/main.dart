@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'audio_monitor_service.dart';
 import 'session_engine.dart';
+import 'tracking_state.dart';
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
@@ -15,7 +16,7 @@ class ListeningTrackerApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'Listening Tracker — Phase 2',
+      title: 'Listening Tracker — Phase 3',
       theme: ThemeData(
         brightness: Brightness.dark,
         useMaterial3: true,
@@ -165,31 +166,34 @@ class _MonitorDashboardState extends State<MonitorDashboard>
   }
 
   String _computeCurrentState() {
-    if (!_engine.isMonitoring) return 'IDLE';
+    if (!_engine.isMonitoring) return 'IDLE (Monitoring Off)';
 
-    final hasDevice = _engine.activeOutputDevice != null;
-    final isPlaying = _engine.isAudioPlaying;
-    final inGrace = _engine.isInGracePeriod;
+    final isBtConnected = _engine.connectionState == BluetoothConnectionState.connected;
+    final isListening = _engine.sessionState == ListeningSessionState.active;
+    final inGrace = _engine.sessionState == ListeningSessionState.gracePeriod;
+    final isAudioPlaying = _engine.audioState == AudioPlaybackState.playing;
 
-    if (isPlaying && hasDevice) return 'LISTENING (Active)';
-    if (inGrace && hasDevice) return 'PAUSED (Grace Period)';
-    if (isPlaying && !hasDevice) return 'PLAYING (Speaker)';
-    if (!isPlaying && hasDevice) return 'CONNECTED (Silent)';
-    return 'STANDBY';
+    if (isListening) return 'LISTENING (Active)';
+    if (inGrace) {
+      final rem = _engine.gracePeriodRemaining?.inSeconds ?? 0;
+      return 'PAUSED (Grace: ${rem}s)';
+    }
+    if (isBtConnected && !isAudioPlaying) return 'CONNECTED (Idle / Silent)';
+    if (!isBtConnected && isAudioPlaying) return 'PLAYING (Phone Speaker)';
+    return 'STANDBY (No Device)';
   }
 
   Color _getStateColor(String state) {
-    switch (state) {
-      case 'LISTENING (Active)':
-        return Colors.greenAccent.shade400;
-      case 'PAUSED (Grace Period)':
-        return Colors.amberAccent.shade400;
-      case 'PLAYING (Speaker)':
-        return Colors.orangeAccent.shade400;
-      case 'CONNECTED (Silent)':
-        return Colors.lightBlueAccent.shade400;
-      default:
-        return Colors.grey.shade400;
+    if (state.startsWith('LISTENING')) {
+      return Colors.greenAccent.shade400;
+    } else if (state.startsWith('PAUSED')) {
+      return Colors.amberAccent.shade400;
+    } else if (state.startsWith('CONNECTED')) {
+      return Colors.lightBlueAccent.shade400;
+    } else if (state.startsWith('PLAYING')) {
+      return Colors.orangeAccent.shade400;
+    } else {
+      return Colors.grey.shade400;
     }
   }
 
@@ -203,7 +207,7 @@ class _MonitorDashboardState extends State<MonitorDashboard>
         title: const FittedBox(
           fit: BoxFit.scaleDown,
           child: Text(
-            'LISTENING TRACKER — PHASE 2',
+            'LISTENING TRACKER — PHASE 3',
             style: TextStyle(
               fontSize: 16,
               fontWeight: FontWeight.bold,
@@ -235,6 +239,10 @@ class _MonitorDashboardState extends State<MonitorDashboard>
 
             // Current state big indicator
             _buildStateIndicator(currentState, stateColor),
+            const SizedBox(height: 10),
+
+            // Phase 3: Separate Connection & Listening Durations
+            _buildDualDurationCard(),
             const SizedBox(height: 14),
 
             // Live Session Card
@@ -404,19 +412,174 @@ class _MonitorDashboardState extends State<MonitorDashboard>
     );
   }
 
+  Widget _buildDualDurationCard() {
+    final isBtConnected = _engine.connectionState == BluetoothConnectionState.connected;
+    final isListening = _engine.sessionState == ListeningSessionState.active;
+    final inGrace = _engine.sessionState == ListeningSessionState.gracePeriod;
+
+    return Row(
+      children: [
+        // Connection Duration Box
+        Expanded(
+          child: Container(
+            padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 10),
+            decoration: BoxDecoration(
+              color: Colors.cyan.shade900.withValues(alpha: 0.25),
+              borderRadius: BorderRadius.circular(10),
+              border: Border.all(
+                color: isBtConnected ? Colors.cyanAccent.shade400 : Colors.cyan.shade900,
+                width: 1.5,
+              ),
+            ),
+            child: Column(
+              children: [
+                Text(
+                  'CONNECTION TIME',
+                  style: TextStyle(
+                    color: Colors.cyanAccent.shade100,
+                    fontSize: 10,
+                    fontWeight: FontWeight.bold,
+                    letterSpacing: 0.8,
+                  ),
+                ),
+                const SizedBox(height: 4),
+                FittedBox(
+                  fit: BoxFit.scaleDown,
+                  child: Text(
+                    _engine.liveConnectedFormatted,
+                    style: const TextStyle(
+                      fontSize: 22,
+                      fontWeight: FontWeight.bold,
+                      color: Colors.white,
+                      fontFamily: 'monospace',
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  isBtConnected ? 'Connected' : 'Disconnected',
+                  style: TextStyle(
+                    fontSize: 11,
+                    color: isBtConnected ? Colors.cyanAccent : Colors.grey.shade500,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+        const SizedBox(width: 10),
+        // Listening Duration Box
+        Expanded(
+          child: Container(
+            padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 10),
+            decoration: BoxDecoration(
+              color: Colors.green.shade900.withValues(alpha: 0.25),
+              borderRadius: BorderRadius.circular(10),
+              border: Border.all(
+                color: isListening
+                    ? Colors.greenAccent.shade400
+                    : inGrace
+                        ? Colors.amberAccent.shade400
+                        : Colors.green.shade900,
+                width: 1.5,
+              ),
+            ),
+            child: Column(
+              children: [
+                Text(
+                  'LISTENING TIME',
+                  style: TextStyle(
+                    color: Colors.greenAccent.shade100,
+                    fontSize: 10,
+                    fontWeight: FontWeight.bold,
+                    letterSpacing: 0.8,
+                  ),
+                ),
+                const SizedBox(height: 4),
+                FittedBox(
+                  fit: BoxFit.scaleDown,
+                  child: Text(
+                    _engine.liveActiveListeningFormatted,
+                    style: const TextStyle(
+                      fontSize: 22,
+                      fontWeight: FontWeight.bold,
+                      color: Colors.white,
+                      fontFamily: 'monospace',
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  isListening
+                      ? 'Listening'
+                      : inGrace
+                          ? 'Paused (Grace)'
+                          : 'Not listening',
+                  style: TextStyle(
+                    fontSize: 11,
+                    color: isListening
+                        ? Colors.greenAccent
+                        : inGrace
+                            ? Colors.amberAccent
+                            : Colors.grey.shade500,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
   Widget _buildLiveSessionCard() {
+    final isBt = _engine.connectionState == BluetoothConnectionState.connected;
+    final isAudio = _engine.audioState == AudioPlaybackState.playing;
+    final sessState = _engine.sessionState;
+
+    String sessionStatus;
+    Color sessionColor;
+    if (sessState == ListeningSessionState.active) {
+      sessionStatus = 'Active (Listening)';
+      sessionColor = Colors.greenAccent.shade200;
+    } else if (sessState == ListeningSessionState.gracePeriod) {
+      final rem = _engine.gracePeriodRemaining?.inSeconds ?? 0;
+      sessionStatus = 'Paused (Resuming within ${rem}s)';
+      sessionColor = Colors.amberAccent;
+    } else {
+      sessionStatus = isBt ? 'Idle (Connected, Not Listening)' : 'Idle (Disconnected)';
+      sessionColor = Colors.grey;
+    }
+
     return _buildSection(
-      'Live Session',
+      'Live Session Tracking (Separated)',
       [
-        _buildRow('Active Listening', _engine.liveActiveListeningFormatted,
+        _buildRow(
+          'Bluetooth State',
+          isBt ? 'Connected' : 'Disconnected',
+          valueColor: isBt ? Colors.cyanAccent : Colors.grey,
+        ),
+        _buildRow(
+          'Audio Playback',
+          isAudio ? 'Playing' : 'Not Playing',
+          valueColor: isAudio ? Colors.greenAccent : Colors.grey,
+        ),
+        _buildRow(
+          'Listening Session',
+          sessionStatus,
+          valueColor: sessionColor,
+          valueWeight: FontWeight.bold,
+        ),
+        _buildRow('Connection Duration', _engine.liveConnectedFormatted,
+            valueColor: Colors.cyanAccent.shade100),
+        _buildRow('Listening Duration', _engine.liveActiveListeningFormatted,
             valueColor: Colors.greenAccent.shade200, valueWeight: FontWeight.bold),
-        _buildRow('Connected Time', _engine.liveConnectedFormatted),
         _buildRow('Silent / Paused', _engine.liveSilentFormatted),
         _buildRow('Continuous Total', _engine.liveContinuousFormatted,
             valueColor: Colors.tealAccent.shade100),
         _buildRow(
-          'Grace Period',
-          '${_engine.gracePeriod.inMinutes} min (EXPERIMENTAL)',
+          'Audio Grace Window',
+          '${_engine.gracePeriod.inMinutes} min (Audio pause only)',
           valueColor: Colors.amberAccent.shade100,
         ),
       ],
@@ -832,15 +995,28 @@ class _MonitorDashboardState extends State<MonitorDashboard>
                   itemBuilder: (context, index) {
                     final entry = _eventLog[index];
                     Color entryColor = Colors.grey.shade300;
-                    if (entry.contains('DEVICE_CONNECTED')) {
-                      entryColor = Colors.green.shade300;
-                    } else if (entry.contains('DEVICE_DISCONNECTED')) {
+                    if (entry.contains('BT_CONNECTED') ||
+                        entry.contains('CONNECTION_STARTED') ||
+                        entry.contains('DEVICE_CONNECTED')) {
+                      entryColor = Colors.cyanAccent.shade200;
+                    } else if (entry.contains('BT_DISCONNECTED') ||
+                        entry.contains('CONNECTION_ENDED') ||
+                        entry.contains('DEVICE_DISCONNECTED')) {
                       entryColor = Colors.red.shade300;
-                    } else if (entry.contains('AUDIO_STARTED')) {
-                      entryColor = Colors.blue.shade300;
-                    } else if (entry.contains('AUDIO_STOPPED')) {
+                    } else if (entry.contains('LISTENING_STARTED') ||
+                        entry.contains('AUDIO_STARTED')) {
+                      entryColor = Colors.greenAccent.shade200;
+                    } else if (entry.contains('LISTENING_RESUMED') ||
+                        entry.contains('GRACE_CANCELLED')) {
+                      entryColor = Colors.tealAccent.shade200;
+                    } else if (entry.contains('AUDIO_STOPPED') ||
+                        entry.contains('GRACE_STARTED')) {
+                      entryColor = Colors.amberAccent.shade200;
+                    } else if (entry.contains('GRACE_EXPIRED') ||
+                        entry.contains('LISTENING_ENDED')) {
                       entryColor = Colors.orange.shade300;
-                    } else if (entry.contains('AUDIO_OUTPUT_CHANGED')) {
+                    } else if (entry.contains('OUTPUT_CHANGED') ||
+                        entry.contains('AUDIO_OUTPUT_CHANGED')) {
                       entryColor = Colors.purple.shade300;
                     } else if (entry.contains('PERSISTED_SESSION')) {
                       entryColor = Colors.tealAccent.shade200;
