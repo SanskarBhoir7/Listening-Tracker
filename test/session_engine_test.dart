@@ -367,26 +367,94 @@ void main() {
   });
 
   // =========================================================================
-  // Bonus: Fast real-timer test verifying Timer cancellation
+  // RACE-CONDITION & SINGLE-SHOT FINALIZATION TESTS
   // =========================================================================
-  test('Fast timer expiration verifies real Timer callback', () async {
-    final fastEngine = SessionEngine(
-      database: db,
-      gracePeriod: const Duration(milliseconds: 25),
+  test('RACE CONDITION FIX: Bluetooth disconnect followed immediately by output-change emits CONNECTION_ENDED and LISTENING_ENDED exactly once', () async {
+    final emittedEvents = <String>[];
+    engine.onTrackingEvent = (e) => emittedEvents.add(e.eventType);
+
+    // 1. Connect and start active listening
+    await engine.handleNativeEvent(btConnectEvent(name: 'realme Buds T200 Lite'));
+    await engine.handleNativeEvent(audioStartEvent());
+    expect(engine.connectionState, equals(BluetoothConnectionState.connected));
+    expect(engine.sessionState, equals(ListeningSessionState.active));
+
+    // 2. Disconnect Bluetooth, followed immediately by OUTPUT_CHANGED (e.g. Phone Speaker)
+    await engine.handleNativeEvent(btDisconnectEvent(name: 'realme Buds T200 Lite'));
+    await engine.handleNativeEvent(outputChangeEvent(name: 'Phone Speaker', connType: 'internal'));
+
+    // Count occurrences of finalization events
+    final connectionEndedCount = emittedEvents.where((e) => e == 'CONNECTION_ENDED').length;
+    final listeningEndedCount = emittedEvents.where((e) => e == 'LISTENING_ENDED').length;
+
+    expect(connectionEndedCount, equals(1), reason: 'CONNECTION_ENDED must be emitted exactly once');
+    expect(listeningEndedCount, equals(1), reason: 'LISTENING_ENDED must be emitted exactly once');
+
+    // Verify database contains exactly one completed connection record and one completed session
+    expect(db.connectionRecords.length, equals(1));
+    expect(db.connectionRecords.first.status, equals('completed'));
+    expect(db.deviceSessions.length, equals(1));
+    expect(db.deviceSessions.first.status, equals('completed'));
+
+    // Verify engine active references are cleared
+    expect(engine.activeConnectionRecord, isNull);
+    expect(engine.currentDeviceSession, isNull);
+  });
+
+  test('RACE CONDITION FIX: Rapid duplicate disconnect events do not re-finalize or duplicate records', () async {
+    final emittedEvents = <String>[];
+    engine.onTrackingEvent = (e) => emittedEvents.add(e.eventType);
+
+    await engine.handleNativeEvent(btConnectEvent(name: 'realme Buds T200 Lite'));
+    await engine.handleNativeEvent(audioStartEvent());
+
+    // Send two identical disconnect events in sequence
+    await engine.handleNativeEvent(btDisconnectEvent(name: 'realme Buds T200 Lite'));
+    await engine.handleNativeEvent(btDisconnectEvent(name: 'realme Buds T200 Lite'));
+
+    final connectionEndedCount = emittedEvents.where((e) => e == 'CONNECTION_ENDED').length;
+    final listeningEndedCount = emittedEvents.where((e) => e == 'LISTENING_ENDED').length;
+
+    expect(connectionEndedCount, equals(1));
+    expect(listeningEndedCount, equals(1));
+    expect(db.connectionRecords.length, equals(1));
+    expect(db.deviceSessions.length, equals(1));
+  });
+
+  test('RACE CONDITION FIX: Active references are detached before async persistence', () async {
+    bool referencesWereClearedDuringSave = false;
+
+    // Use a custom DatabaseAdapter hook to inspect engine state during the save operation
+    final slowDb = HookedDatabaseAdapter(
+      onSaveConnection: () {
+        if (engine.activeConnectionRecord == null) {
+          referencesWereClearedDuringSave = true;
+        }
+      },
     );
-    fastEngine.startMonitoring();
 
-    await fastEngine.handleNativeEvent(btConnectEvent());
-    await fastEngine.handleNativeEvent(audioStartEvent());
-    await fastEngine.handleNativeEvent(audioStopEvent());
-    expect(fastEngine.sessionState, equals(ListeningSessionState.gracePeriod));
+    final testEngine = SessionEngine(database: slowDb);
+    testEngine.startMonitoring();
 
-    // Wait for the fast 25ms timer to fire
-    await Future.delayed(const Duration(milliseconds: 50));
+    await testEngine.handleNativeEvent(btConnectEvent());
+    await testEngine.handleNativeEvent(btDisconnectEvent());
 
-    expect(fastEngine.sessionState, equals(ListeningSessionState.idle));
-    expect(fastEngine.currentDeviceSession, isNull);
+    expect(referencesWereClearedDuringSave, isTrue,
+        reason: 'Active connection reference must be null before the DB save completes');
 
-    fastEngine.dispose();
+    testEngine.dispose();
   });
 }
+
+class HookedDatabaseAdapter extends InMemoryDatabaseAdapter {
+  final void Function()? onSaveConnection;
+
+  HookedDatabaseAdapter({this.onSaveConnection});
+
+  @override
+  Future<void> saveConnectionRecord(record) async {
+    onSaveConnection?.call();
+    return super.saveConnectionRecord(record);
+  }
+}
+

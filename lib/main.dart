@@ -2,8 +2,12 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'audio_monitor_service.dart';
+import 'database/database_adapter.dart';
+import 'database/database_helper.dart';
 import 'session_engine.dart';
 import 'tracking_state.dart';
+import 'views/analytics_view.dart';
+import 'views/history_view.dart';
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
@@ -30,7 +34,16 @@ class ListeningTrackerApp extends StatelessWidget {
 }
 
 class MonitorDashboard extends StatefulWidget {
-  const MonitorDashboard({super.key});
+  final AudioMonitorService? audioService;
+  final SessionEngine? engine;
+  final DatabaseAdapter? database;
+
+  const MonitorDashboard({
+    super.key,
+    this.audioService,
+    this.engine,
+    this.database,
+  });
 
   @override
   State<MonitorDashboard> createState() => _MonitorDashboardState();
@@ -38,9 +51,18 @@ class MonitorDashboard extends StatefulWidget {
 
 class _MonitorDashboardState extends State<MonitorDashboard>
     with WidgetsBindingObserver {
-  final AudioMonitorService _audioService = AudioMonitorService();
-  final SessionEngine _engine = SessionEngine();
+  late final AudioMonitorService _audioService;
+  late final SessionEngine _engine;
+  late final DatabaseAdapter _database;
+  late final bool _ownsEngine;
   StreamSubscription<Map<String, dynamic>>? _eventSubscription;
+
+  // Selected navigation tab (0: Live Monitor, 1: History, 2: Analytics)
+  int _selectedTabIndex = 0;
+
+  // Global keys to trigger reloads on child views
+  final GlobalKey<HistoryViewState> _historyKey = GlobalKey<HistoryViewState>();
+  final GlobalKey<AnalyticsViewState> _analyticsKey = GlobalKey<AnalyticsViewState>();
 
   // Permissions state
   Map<String, bool> _permissions = {};
@@ -53,6 +75,16 @@ class _MonitorDashboardState extends State<MonitorDashboard>
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+
+    _database = widget.database ?? DatabaseHelper.instance;
+    _audioService = widget.audioService ?? AudioMonitorService();
+    if (widget.engine != null) {
+      _engine = widget.engine!;
+      _ownsEngine = false;
+    } else {
+      _engine = SessionEngine(database: _database);
+      _ownsEngine = true;
+    }
 
     _engine.onStateChanged = () {
       if (mounted) setState(() {});
@@ -74,7 +106,9 @@ class _MonitorDashboardState extends State<MonitorDashboard>
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     _eventSubscription?.cancel();
-    _engine.dispose();
+    if (_ownsEngine) {
+      _engine.dispose();
+    }
     super.dispose();
   }
 
@@ -202,13 +236,25 @@ class _MonitorDashboardState extends State<MonitorDashboard>
     final currentState = _computeCurrentState();
     final stateColor = _getStateColor(currentState);
 
+    String appTitle;
+    switch (_selectedTabIndex) {
+      case 1:
+        appTitle = 'LISTENING HISTORY';
+        break;
+      case 2:
+        appTitle = 'LISTENING ANALYTICS';
+        break;
+      default:
+        appTitle = 'LISTENING TRACKER — LIVE MONITOR';
+    }
+
     return Scaffold(
       appBar: AppBar(
-        title: const FittedBox(
+        title: FittedBox(
           fit: BoxFit.scaleDown,
           child: Text(
-            'LISTENING TRACKER — PHASE 3',
-            style: TextStyle(
+            appTitle,
+            style: const TextStyle(
               fontSize: 16,
               fontWeight: FontWeight.bold,
               letterSpacing: 1.1,
@@ -218,58 +264,88 @@ class _MonitorDashboardState extends State<MonitorDashboard>
         centerTitle: true,
         actions: [
           IconButton(
+            key: const Key('appbar_refresh_button'),
             icon: const Icon(Icons.refresh),
-            onPressed: _engine.isMonitoring ? _refreshCurrentState : null,
-            tooltip: 'Refresh state',
+            onPressed: (_selectedTabIndex == 0 && !_engine.isMonitoring)
+                ? null
+                : () {
+                    if (_selectedTabIndex == 1) {
+                      _historyKey.currentState?.loadHistoryData();
+                    } else if (_selectedTabIndex == 2) {
+                      _analyticsKey.currentState?.loadAnalyticsData();
+                    } else if (_engine.isMonitoring) {
+                      _refreshCurrentState();
+                    }
+                  },
+            tooltip: _selectedTabIndex == 1
+                ? 'Refresh history'
+                : (_selectedTabIndex == 2 ? 'Refresh analytics' : 'Refresh state'),
           ),
         ],
       ),
-      body: SingleChildScrollView(
-        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            // Permissions card if missing
-            _buildPermissionsCard(),
-            const SizedBox(height: 10),
+      body: IndexedStack(
+        index: _selectedTabIndex,
+        children: [
+          _buildLiveMonitorView(currentState, stateColor),
+          HistoryView(key: _historyKey, database: _database),
+          AnalyticsView(key: _analyticsKey, database: _database),
+        ],
+      ),
+      bottomNavigationBar: NavigationBar(
+        selectedIndex: _selectedTabIndex,
+        onDestinationSelected: (int index) {
+          setState(() {
+            _selectedTabIndex = index;
+          });
+        },
+        destinations: const [
+          NavigationDestination(
+            icon: Icon(Icons.monitor_heart_outlined),
+            selectedIcon: Icon(Icons.monitor_heart),
+            label: 'Live Monitor',
+          ),
+          NavigationDestination(
+            icon: Icon(Icons.history_outlined),
+            selectedIcon: Icon(Icons.history),
+            label: 'History',
+          ),
+          NavigationDestination(
+            icon: Icon(Icons.analytics_outlined),
+            selectedIcon: Icon(Icons.analytics),
+            label: 'Analytics',
+          ),
+        ],
+      ),
+    );
+  }
 
-            // Start/Stop monitoring button
-            _buildControlButton(),
-            const SizedBox(height: 14),
-
-            // Current state big indicator
-            _buildStateIndicator(currentState, stateColor),
-            const SizedBox(height: 10),
-
-            // Phase 3: Separate Connection & Listening Durations
-            _buildDualDurationCard(),
-            const SizedBox(height: 14),
-
-            // Live Session Card
-            _buildLiveSessionCard(),
-            const SizedBox(height: 12),
-
-            // Active Output Device
-            _buildActiveOutputCard(),
-            const SizedBox(height: 12),
-
-            // Connected Devices Registry
-            _buildConnectedDevicesCard(),
-            const SizedBox(height: 12),
-
-            // Today Summary
-            _buildTodaySummaryCard(),
-            const SizedBox(height: 12),
-
-            // Recent Sessions (Today's history)
-            _buildRecentSessionsCard(),
-            const SizedBox(height: 12),
-
-            // Live Debug Event Log
-            _buildEventLog(),
-            const SizedBox(height: 24),
-          ],
-        ),
+  Widget _buildLiveMonitorView(String currentState, Color stateColor) {
+    return SingleChildScrollView(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          _buildPermissionsCard(),
+          const SizedBox(height: 12),
+          _buildControlButton(),
+          const SizedBox(height: 12),
+          _buildStateIndicator(currentState, stateColor),
+          const SizedBox(height: 12),
+          _buildDualDurationCard(),
+          const SizedBox(height: 12),
+          _buildLiveSessionCard(),
+          const SizedBox(height: 12),
+          _buildActiveOutputCard(),
+          const SizedBox(height: 12),
+          _buildConnectedDevicesCard(),
+          const SizedBox(height: 12),
+          _buildTodaySummaryCard(),
+          const SizedBox(height: 12),
+          _buildRecentSessionsCard(),
+          const SizedBox(height: 12),
+          _buildEventLog(),
+          const SizedBox(height: 16),
+        ],
       ),
     );
   }
@@ -610,19 +686,14 @@ class _MonitorDashboardState extends State<MonitorDashboard>
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                Text(
-                  'Connected Devices (${devices.length})',
-                  style: TextStyle(
-                    fontSize: 13,
-                    fontWeight: FontWeight.bold,
-                    color: Colors.teal.shade300,
-                    letterSpacing: 0.8,
-                  ),
-                ),
-              ],
+            Text(
+              'Connected Devices (${devices.length})',
+              style: TextStyle(
+                fontSize: 13,
+                fontWeight: FontWeight.bold,
+                color: Colors.teal.shade300,
+                letterSpacing: 0.8,
+              ),
             ),
             const Divider(height: 16),
             if (devices.isEmpty)
@@ -746,8 +817,11 @@ class _MonitorDashboardState extends State<MonitorDashboard>
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            Wrap(
+              alignment: WrapAlignment.spaceBetween,
+              crossAxisAlignment: WrapCrossAlignment.center,
+              spacing: 8,
+              runSpacing: 4,
               children: [
                 Text(
                   'Recent Sessions (Today)',
@@ -840,15 +914,17 @@ class _MonitorDashboardState extends State<MonitorDashboard>
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          ConstrainedBox(
-            constraints: const BoxConstraints(minWidth: 70, maxWidth: 100),
+          Flexible(
+            flex: 4,
             child: Text(
               label,
+              softWrap: true,
               style: TextStyle(color: Colors.grey.shade400, fontSize: 11),
             ),
           ),
           const SizedBox(width: 8),
           Expanded(
+            flex: 6,
             child: Text(
               value,
               textAlign: TextAlign.end,
@@ -898,33 +974,68 @@ class _MonitorDashboardState extends State<MonitorDashboard>
   }) {
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 4),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          ConstrainedBox(
-            constraints: const BoxConstraints(minWidth: 90, maxWidth: 130),
-            child: Text(
-              label,
-              style: TextStyle(
-                color: Colors.grey.shade400,
-                fontSize: 13,
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          // If available width is extremely narrow (< 240px) or high accessibility scale,
+          // stack label and value vertically so long values like
+          // "Paused (Resuming within 179s)" never overflow horizontally.
+          if (constraints.maxWidth < 240) {
+            return Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  label,
+                  softWrap: true,
+                  style: TextStyle(
+                    color: Colors.grey.shade400,
+                    fontSize: 13,
+                  ),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  value,
+                  softWrap: true,
+                  style: TextStyle(
+                    fontSize: 13,
+                    fontWeight: valueWeight ?? FontWeight.w500,
+                    color: valueColor ?? Colors.white,
+                  ),
+                ),
+              ],
+            );
+          }
+
+          return Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Flexible(
+                flex: 4,
+                child: Text(
+                  label,
+                  softWrap: true,
+                  style: TextStyle(
+                    color: Colors.grey.shade400,
+                    fontSize: 13,
+                  ),
+                ),
               ),
-            ),
-          ),
-          const SizedBox(width: 8),
-          Expanded(
-            child: Text(
-              value,
-              textAlign: TextAlign.end,
-              softWrap: true,
-              style: TextStyle(
-                fontSize: 13,
-                fontWeight: valueWeight ?? FontWeight.w500,
-                color: valueColor ?? Colors.white,
+              const SizedBox(width: 8),
+              Expanded(
+                flex: 6,
+                child: Text(
+                  value,
+                  textAlign: TextAlign.end,
+                  softWrap: true,
+                  style: TextStyle(
+                    fontSize: 13,
+                    fontWeight: valueWeight ?? FontWeight.w500,
+                    color: valueColor ?? Colors.white,
+                  ),
+                ),
               ),
-            ),
-          ),
-        ],
+            ],
+          );
+        },
       ),
     );
   }
@@ -936,8 +1047,11 @@ class _MonitorDashboardState extends State<MonitorDashboard>
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            Wrap(
+              alignment: WrapAlignment.spaceBetween,
+              crossAxisAlignment: WrapCrossAlignment.center,
+              spacing: 8,
+              runSpacing: 4,
               children: [
                 Text(
                   'Event Log',
@@ -949,8 +1063,15 @@ class _MonitorDashboardState extends State<MonitorDashboard>
                   ),
                 ),
                 Row(
+                  mainAxisSize: MainAxisSize.min,
                   children: [
                     TextButton(
+                      style: TextButton.styleFrom(
+                        visualDensity: VisualDensity.compact,
+                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                        minimumSize: Size.zero,
+                        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                      ),
                       onPressed: () {
                         Clipboard.setData(ClipboardData(text: _eventLog.join('\n')));
                         ScaffoldMessenger.of(context).showSnackBar(
@@ -962,7 +1083,14 @@ class _MonitorDashboardState extends State<MonitorDashboard>
                       },
                       child: const Text('Copy', style: TextStyle(fontSize: 12)),
                     ),
+                    const SizedBox(width: 6),
                     TextButton(
+                      style: TextButton.styleFrom(
+                        visualDensity: VisualDensity.compact,
+                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                        minimumSize: Size.zero,
+                        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                      ),
                       onPressed: () {
                         setState(() {
                           _eventLog.clear();

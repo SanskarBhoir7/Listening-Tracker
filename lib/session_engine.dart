@@ -147,21 +147,24 @@ class SessionEngine {
     final now = DateTime.now();
 
     // Finalize connection record if active
-    if (_activeConnectionRecord != null) {
-      await _closeConnectionRecord(_activeConnectionRecord!, now);
-      _activeConnectionRecord = null;
+    final connToClose = _activeConnectionRecord;
+    _activeConnectionRecord = null;
+    if (connToClose != null) {
+      await _closeConnectionRecord(connToClose, now);
     }
 
     // Finalize listening session if active
-    if (_currentDeviceSession != null) {
-      await _closeDeviceSession(_currentDeviceSession!, now);
-      _currentDeviceSession = null;
+    final sessionToClose = _currentDeviceSession;
+    _currentDeviceSession = null;
+    if (sessionToClose != null) {
+      await _closeDeviceSession(sessionToClose, now);
     }
 
     // Finalize continuous session if active
-    if (_currentContinuousSession != null) {
-      await _closeContinuousSession(_currentContinuousSession!, now);
-      _currentContinuousSession = null;
+    final continuousToClose = _currentContinuousSession;
+    _currentContinuousSession = null;
+    if (continuousToClose != null) {
+      await _closeContinuousSession(continuousToClose, now);
     }
 
     _connectedDevices.clear();
@@ -248,8 +251,10 @@ class SessionEngine {
 
       // Ensure connection record exists
       if (_activeConnectionRecord == null || _activeConnectionRecord!.deviceId != stableId) {
-        if (_activeConnectionRecord != null) {
-          await _closeConnectionRecord(_activeConnectionRecord!, now);
+        final prevConn = _activeConnectionRecord;
+        _activeConnectionRecord = null;
+        if (prevConn != null) {
+          await _closeConnectionRecord(prevConn, now);
         }
         await _startConnectionRecord(device, now);
       }
@@ -260,8 +265,10 @@ class SessionEngine {
         if (_sessionState != ListeningSessionState.active ||
             _currentDeviceSession == null ||
             _currentDeviceSession!.deviceId != stableId) {
-          if (_currentDeviceSession != null) {
-            await _closeDeviceSession(_currentDeviceSession!, now);
+          final prevSession = _currentDeviceSession;
+          _currentDeviceSession = null;
+          if (prevSession != null) {
+            await _closeDeviceSession(prevSession, now);
           }
           await _startListeningSession(device, now);
         }
@@ -276,18 +283,24 @@ class SessionEngine {
       // Switched to internal speaker or disconnected
       if (_activeOutputDevice != null) {
         // Only finalize if we actually had an active output before
-        if (_activeConnectionRecord != null) {
-          await _closeConnectionRecord(_activeConnectionRecord!, now);
-          _activeConnectionRecord = null;
+        final connToClose = _activeConnectionRecord;
+        _activeConnectionRecord = null;
+        if (connToClose != null) {
+          await _closeConnectionRecord(connToClose, now);
         }
-        if (_currentDeviceSession != null) {
-          await _closeDeviceSession(_currentDeviceSession!, now);
-          _currentDeviceSession = null;
+
+        final sessionToClose = _currentDeviceSession;
+        _currentDeviceSession = null;
+        if (sessionToClose != null) {
+          await _closeDeviceSession(sessionToClose, now);
         }
-        if (_currentContinuousSession != null) {
-          await _closeContinuousSession(_currentContinuousSession!, now);
-          _currentContinuousSession = null;
+
+        final continuousToClose = _currentContinuousSession;
+        _currentContinuousSession = null;
+        if (continuousToClose != null) {
+          await _closeContinuousSession(continuousToClose, now);
         }
+
         _cancelGracePeriod();
       }
       _activeOutputDevice = null;
@@ -347,8 +360,12 @@ class SessionEngine {
           // Make active output if primary or bluetooth
           if (_activeOutputDevice == null || connectionType == 'bluetooth') {
             final isDeviceSwitch = _activeOutputDevice != null && _activeOutputDevice!.id != stableId;
-            if (isDeviceSwitch && _activeConnectionRecord != null) {
-              await _closeConnectionRecord(_activeConnectionRecord!, now);
+            if (isDeviceSwitch) {
+              final prevConn = _activeConnectionRecord;
+              _activeConnectionRecord = null;
+              if (prevConn != null) {
+                await _closeConnectionRecord(prevConn, now);
+              }
             }
 
             _activeOutputDevice = device;
@@ -361,8 +378,10 @@ class SessionEngine {
             // Invariant 1 & 2: Bluetooth connected does NOT start listening unless audio is playing!
             if (_audioState == AudioPlaybackState.playing) {
               if (_currentDeviceSession == null || _currentDeviceSession!.deviceId != stableId) {
-                if (_currentDeviceSession != null) {
-                  await _closeDeviceSession(_currentDeviceSession!, now);
+                final prevSession = _currentDeviceSession;
+                _currentDeviceSession = null;
+                if (prevSession != null) {
+                  await _closeDeviceSession(prevSession, now);
                 }
                 await _startListeningSession(device, now);
               }
@@ -394,22 +413,25 @@ class SessionEngine {
           // If the disconnected device was our active connection:
           if (_activeOutputDevice != null && _activeOutputDevice!.id == stableId) {
             // Invariant 5 & 8: End ConnectionRecord immediately!
-            if (_activeConnectionRecord != null) {
-              await _closeConnectionRecord(_activeConnectionRecord!, now);
-              _activeConnectionRecord = null;
+            final connToClose = _activeConnectionRecord;
+            _activeConnectionRecord = null;
+            if (connToClose != null) {
+              await _closeConnectionRecord(connToClose, now);
             }
 
             // Invariant 5: End listening immediately! DO NOT start/use 3-minute grace timer.
             _cancelGracePeriod();
 
-            if (_currentDeviceSession != null) {
-              await _closeDeviceSession(_currentDeviceSession!, now);
-              _currentDeviceSession = null;
+            final sessionToClose = _currentDeviceSession;
+            _currentDeviceSession = null;
+            if (sessionToClose != null) {
+              await _closeDeviceSession(sessionToClose, now);
             }
 
-            if (_currentContinuousSession != null) {
-              await _closeContinuousSession(_currentContinuousSession!, now);
-              _currentContinuousSession = null;
+            final continuousToClose = _currentContinuousSession;
+            _currentContinuousSession = null;
+            if (continuousToClose != null) {
+              await _closeContinuousSession(continuousToClose, now);
             }
 
             _sessionState = ListeningSessionState.idle;
@@ -505,18 +527,24 @@ class SessionEngine {
 
         if (connectionType == 'internal' || deviceName == 'Phone Speaker') {
           // Switched to built-in phone speaker
-          if (_activeConnectionRecord != null) {
-            await _closeConnectionRecord(_activeConnectionRecord!, now);
-            _activeConnectionRecord = null;
+          final connToClose = _activeConnectionRecord;
+          _activeConnectionRecord = null;
+          if (connToClose != null) {
+            await _closeConnectionRecord(connToClose, now);
           }
-          if (_currentDeviceSession != null) {
-            await _closeDeviceSession(_currentDeviceSession!, now);
-            _currentDeviceSession = null;
+
+          final sessionToClose = _currentDeviceSession;
+          _currentDeviceSession = null;
+          if (sessionToClose != null) {
+            await _closeDeviceSession(sessionToClose, now);
           }
-          if (_currentContinuousSession != null) {
-            await _closeContinuousSession(_currentContinuousSession!, now);
-            _currentContinuousSession = null;
+
+          final continuousToClose = _currentContinuousSession;
+          _currentContinuousSession = null;
+          if (continuousToClose != null) {
+            await _closeContinuousSession(continuousToClose, now);
           }
+
           _cancelGracePeriod();
           _activeOutputDevice = null;
           _connectionState = _connectedDevices.isNotEmpty
@@ -532,13 +560,16 @@ class SessionEngine {
 
           // If switching from Device A to Device B
           if (_activeOutputDevice != null && _activeOutputDevice!.id != stableId) {
-            if (_activeConnectionRecord != null) {
-              await _closeConnectionRecord(_activeConnectionRecord!, now);
-              _activeConnectionRecord = null;
+            final prevConn = _activeConnectionRecord;
+            _activeConnectionRecord = null;
+            if (prevConn != null) {
+              await _closeConnectionRecord(prevConn, now);
             }
-            if (_currentDeviceSession != null) {
-              await _closeDeviceSession(_currentDeviceSession!, now);
-              _currentDeviceSession = null;
+
+            final prevSession = _currentDeviceSession;
+            _currentDeviceSession = null;
+            if (prevSession != null) {
+              await _closeDeviceSession(prevSession, now);
             }
           }
 
@@ -739,14 +770,16 @@ class SessionEngine {
     _gracePeriodTimer = null;
     _gracePeriodStartedAt = null;
 
-    if (_currentDeviceSession != null) {
-      await _closeDeviceSession(_currentDeviceSession!, now);
-      _currentDeviceSession = null;
+    final sessionToClose = _currentDeviceSession;
+    _currentDeviceSession = null;
+    if (sessionToClose != null) {
+      await _closeDeviceSession(sessionToClose, now);
     }
 
-    if (_currentContinuousSession != null) {
-      await _closeContinuousSession(_currentContinuousSession!, now);
-      _currentContinuousSession = null;
+    final continuousToClose = _currentContinuousSession;
+    _currentContinuousSession = null;
+    if (continuousToClose != null) {
+      await _closeContinuousSession(continuousToClose, now);
     }
 
     await refreshHistory();

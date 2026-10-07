@@ -2,7 +2,9 @@ import '../models/audio_device.dart';
 import '../models/connection_record.dart';
 import '../models/continuous_session.dart';
 import '../models/daily_stats.dart';
+import '../models/device_usage_stats.dart';
 import '../models/listening_session.dart';
+import '../models/period_stats.dart';
 
 /// Database adapter abstraction for SessionEngine.
 ///
@@ -16,18 +18,24 @@ abstract class DatabaseAdapter {
   Future<void> saveDeviceSession(ListeningSession session);
   Future<List<ListeningSession>> getRecentDeviceSessions({int limit = 50});
   Future<List<ListeningSession>> getDeviceSessionsForDay(DateTime day);
+  Future<List<ListeningSession>> getDeviceSessionsForDateRange(DateTime start, DateTime end);
 
   Future<void> saveContinuousSession(ContinuousListeningSession session);
   Future<List<ContinuousListeningSession>> getRecentContinuousSessions({int limit = 50});
   Future<List<ContinuousListeningSession>> getContinuousSessionsForDay(DateTime day);
+  Future<List<ContinuousListeningSession>> getContinuousSessionsForDateRange(DateTime start, DateTime end);
 
   Future<void> saveConnectionRecord(ConnectionRecord record);
   Future<ConnectionRecord?> getConnectionRecord(String id);
   Future<ConnectionRecord?> getActiveConnectionRecord({String? deviceId});
   Future<List<ConnectionRecord>> getRecentConnectionRecords({int limit = 50});
   Future<List<ConnectionRecord>> getConnectionRecordsForDay(DateTime day);
+  Future<List<ConnectionRecord>> getConnectionRecordsForDateRange(DateTime start, DateTime end);
 
   Future<DailyStats> getDailyStats(DateTime day);
+  Future<PeriodStats> getPeriodStats(DateTime start, DateTime end);
+  Future<List<DeviceUsageStats>> getDeviceUsageStats(DateTime start, DateTime end);
+  Future<List<DateTime>> getDatesWithActivity();
 }
 
 /// In-memory implementation of [DatabaseAdapter] for unit tests.
@@ -196,6 +204,184 @@ class InMemoryDatabaseAdapter implements DatabaseAdapter {
       continuousSessionCount: dayContinuous.length,
       devicesUsedCount: uniqueDeviceIds.length,
       longestContinuousSessionSeconds: longestContinuous,
+    );
+  }
+
+  @override
+  Future<List<ListeningSession>> getDeviceSessionsForDateRange(
+    DateTime start,
+    DateTime end,
+  ) async {
+    final startMs = start.millisecondsSinceEpoch;
+    final endMs = end.millisecondsSinceEpoch;
+    final list = deviceSessions.where((s) {
+      final t = s.connectedAt.millisecondsSinceEpoch;
+      return t >= startMs && t <= endMs;
+    }).toList();
+    list.sort((a, b) => b.connectedAt.compareTo(a.connectedAt));
+    return list;
+  }
+
+  @override
+  Future<List<ContinuousListeningSession>> getContinuousSessionsForDateRange(
+    DateTime start,
+    DateTime end,
+  ) async {
+    final startMs = start.millisecondsSinceEpoch;
+    final endMs = end.millisecondsSinceEpoch;
+    final list = continuousSessions.where((s) {
+      final t = s.startedAt.millisecondsSinceEpoch;
+      return t >= startMs && t <= endMs;
+    }).toList();
+    list.sort((a, b) => b.startedAt.compareTo(a.startedAt));
+    return list;
+  }
+
+  @override
+  Future<List<ConnectionRecord>> getConnectionRecordsForDateRange(
+    DateTime start,
+    DateTime end,
+  ) async {
+    final startMs = start.millisecondsSinceEpoch;
+    final endMs = end.millisecondsSinceEpoch;
+    final list = connectionRecords.where((r) {
+      final t = r.connectedAt.millisecondsSinceEpoch;
+      return t >= startMs && t <= endMs;
+    }).toList();
+    list.sort((a, b) => b.connectedAt.compareTo(a.connectedAt));
+    return list;
+  }
+
+  @override
+  Future<PeriodStats> getPeriodStats(DateTime start, DateTime end) async {
+    final sessions = await getDeviceSessionsForDateRange(start, end);
+    final continuous = await getContinuousSessionsForDateRange(start, end);
+    final connections = await getConnectionRecordsForDateRange(start, end);
+
+    if (sessions.isEmpty && continuous.isEmpty && connections.isEmpty) {
+      return PeriodStats.empty(start, end);
+    }
+
+    int totalListening = 0;
+    int totalSilent = 0;
+    int longestSession = 0;
+    final uniqueDeviceIds = <String>{};
+
+    for (final s in sessions) {
+      totalListening += s.activeListeningDurationSeconds;
+      totalSilent += s.silentDurationSeconds;
+      if (s.activeListeningDurationSeconds > longestSession) {
+        longestSession = s.activeListeningDurationSeconds;
+      }
+      uniqueDeviceIds.add(s.deviceId);
+    }
+
+    int totalConnected = 0;
+    for (final r in connections) {
+      totalConnected += r.durationSeconds;
+    }
+
+    return PeriodStats(
+      startDate: start,
+      endDate: end,
+      totalListeningSeconds: totalListening,
+      totalConnectedSeconds: totalConnected,
+      totalSilentSeconds: totalSilent,
+      sessionCount: sessions.length,
+      continuousSessionCount: continuous.length,
+      devicesUsedCount: uniqueDeviceIds.length,
+      longestSessionSeconds: longestSession,
+    );
+  }
+
+  @override
+  Future<List<DeviceUsageStats>> getDeviceUsageStats(
+    DateTime start,
+    DateTime end,
+  ) async {
+    final sessions = await getDeviceSessionsForDateRange(start, end);
+    final connections = await getConnectionRecordsForDateRange(start, end);
+
+    final map = <String, _MutableDeviceStats>{};
+
+    for (final s in sessions) {
+      final entry = map.putIfAbsent(
+        s.deviceId,
+        () => _MutableDeviceStats(
+          deviceId: s.deviceId,
+          deviceName: s.deviceName,
+        ),
+      );
+      entry.totalListeningSeconds += s.activeListeningDurationSeconds;
+      entry.sessionCount += 1;
+      if (s.activeListeningDurationSeconds > entry.longestSessionSeconds) {
+        entry.longestSessionSeconds = s.activeListeningDurationSeconds;
+      }
+      if (entry.deviceName.isEmpty && s.deviceName.isNotEmpty) {
+        entry.deviceName = s.deviceName;
+      }
+    }
+
+    for (final r in connections) {
+      final entry = map.putIfAbsent(
+        r.deviceId,
+        () => _MutableDeviceStats(
+          deviceId: r.deviceId,
+          deviceName: r.deviceName,
+        ),
+      );
+      entry.totalConnectedSeconds += r.durationSeconds;
+      if (entry.deviceName.isEmpty && r.deviceName.isNotEmpty) {
+        entry.deviceName = r.deviceName;
+      }
+    }
+
+    final result = map.values.map((e) => e.toStats()).toList();
+    result.sort((a, b) {
+      final cmp = b.totalListeningSeconds.compareTo(a.totalListeningSeconds);
+      if (cmp != 0) return cmp;
+      return b.totalConnectedSeconds.compareTo(a.totalConnectedSeconds);
+    });
+    return result;
+  }
+
+  @override
+  Future<List<DateTime>> getDatesWithActivity() async {
+    final dates = <DateTime>{};
+    for (final s in deviceSessions) {
+      final dt = s.connectedAt;
+      dates.add(DateTime(dt.year, dt.month, dt.day));
+    }
+    for (final r in connectionRecords) {
+      final dt = r.connectedAt;
+      dates.add(DateTime(dt.year, dt.month, dt.day));
+    }
+    final list = dates.toList()..sort((a, b) => b.compareTo(a));
+    return list;
+  }
+}
+
+class _MutableDeviceStats {
+  final String deviceId;
+  String deviceName;
+  int totalListeningSeconds = 0;
+  int totalConnectedSeconds = 0;
+  int sessionCount = 0;
+  int longestSessionSeconds = 0;
+
+  _MutableDeviceStats({
+    required this.deviceId,
+    required this.deviceName,
+  });
+
+  DeviceUsageStats toStats() {
+    return DeviceUsageStats(
+      deviceId: deviceId,
+      deviceName: deviceName,
+      totalListeningSeconds: totalListeningSeconds,
+      totalConnectedSeconds: totalConnectedSeconds,
+      sessionCount: sessionCount,
+      longestSessionSeconds: longestSessionSeconds,
     );
   }
 }
