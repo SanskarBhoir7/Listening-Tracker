@@ -55,10 +55,24 @@ class AudioMonitorService : Service() {
 
         val notification = buildNotification()
 
-        // Start as foreground service with appropriate type (connectedDevice on API 34+)
+        // Verify runtime prerequisites for connectedDevice FGS type (BLUETOOTH_CONNECT on API 31+)
+        val hasBtConnect = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            androidx.core.content.ContextCompat.checkSelfPermission(
+                this,
+                android.Manifest.permission.BLUETOOTH_CONNECT
+            ) == android.content.pm.PackageManager.PERMISSION_GRANTED
+        } else {
+            true
+        }
+
+        // Start as foreground service with appropriate type (connectedDevice on API 34+ if permitted)
         try {
             val fgsType = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
-                ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE or ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE
+                if (hasBtConnect) {
+                    ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE or ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE
+                } else {
+                    ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE
+                }
             } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                 ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE
             } else {
@@ -71,14 +85,19 @@ class AudioMonitorService : Service() {
                 fgsType
             )
         } catch (e: Exception) {
-            Log.e(TAG, "Failed to start foreground service", e)
-            // Fallback for older APIs where specific type isn't required
-            startForeground(NOTIFICATION_ID, notification)
+            Log.e(TAG, "Failed to start foreground service with specific type, falling back", e)
+            try {
+                startForeground(NOTIFICATION_ID, notification)
+            } catch (fallbackEx: Exception) {
+                Log.e(TAG, "Fatal fallback startForeground failure", fallbackEx)
+            }
         }
 
         // Initialize the audio monitor engine if not already running
         if (monitorEngine == null) {
-            monitorEngine = AudioMonitorEngine(applicationContext)
+            val engine = AudioMonitorEngine(applicationContext)
+            monitorEngine = engine
+            engine.initialize()
         }
         monitorEngine?.startMonitoring()
 

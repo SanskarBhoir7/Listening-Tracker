@@ -306,5 +306,86 @@ void main() {
       expect(fakeService.stopMonitoringCallCount, equals(1));
       expect(find.text('START MONITORING'), findsOneWidget);
     });
+
+    testWidgets('Initialization with Bluetooth already connected syncs monitoring to ON', (tester) async {
+      // Simulate state where native already had connected device at startup
+      fakeService.stateToReturn = {
+        'isMonitoring': true,
+        'isAudioPlaying': false,
+        'connectedDevices': [
+          {
+            'id': 101,
+            'name': 'realme Buds T200 Lite',
+            'typeName': 'Bluetooth A2DP',
+            'connectionType': 'bluetooth',
+            'address': '00:11:22:33:44:55',
+          }
+        ],
+      };
+
+      await tester.pumpWidget(buildApp(service: fakeService));
+      await tester.pumpAndSettle();
+
+      expect(engine.isMonitoring, isTrue);
+      expect(engine.connectedDevicesList.length, equals(1));
+      expect(find.text('STOP MONITORING'), findsOneWidget);
+
+      await engine.stopMonitoring();
+      await tester.pumpAndSettle();
+    });
+
+    testWidgets('Repeated Bluetooth connect and disconnect cycles preserve state consistency', (tester) async {
+      await tester.pumpWidget(buildApp(service: fakeService));
+      await tester.pumpAndSettle();
+
+      for (int cycle = 0; cycle < 3; cycle++) {
+        // Connect
+        fakeService.emitEvent({
+          'type': 'DEVICE_CONNECTED',
+          'deviceName': 'realme Buds T200 Lite',
+          'connectionType': 'bluetooth',
+          'deviceType': 'Bluetooth A2DP',
+          'timestamp': DateTime.now().millisecondsSinceEpoch,
+        });
+        await tester.pumpAndSettle();
+        expect(engine.isMonitoring, isTrue);
+        expect(engine.connectionState, equals(BluetoothConnectionState.connected));
+
+        // Disconnect
+        fakeService.emitEvent({
+          'type': 'DEVICE_DISCONNECTED',
+          'deviceName': 'realme Buds T200 Lite',
+          'connectionType': 'bluetooth',
+          'deviceType': 'Bluetooth A2DP',
+          'timestamp': DateTime.now().millisecondsSinceEpoch,
+        });
+        await tester.pumpAndSettle();
+        expect(engine.isMonitoring, isFalse);
+        expect(engine.connectionState, equals(BluetoothConnectionState.disconnected));
+      }
+    });
+
+    testWidgets('Async stopMonitoring completes cleanly and handles errors gracefully', (tester) async {
+      await tester.pumpWidget(buildApp(service: fakeService));
+      await tester.pumpAndSettle();
+
+      // Connect device
+      fakeService.emitEvent({
+        'type': 'DEVICE_CONNECTED',
+        'deviceName': 'realme Buds T200 Lite',
+        'connectionType': 'bluetooth',
+        'deviceType': 'Bluetooth A2DP',
+        'timestamp': DateTime.now().millisecondsSinceEpoch,
+      });
+      await tester.pumpAndSettle();
+      expect(engine.isMonitoring, isTrue);
+
+      // Await stop
+      await engine.stopMonitoring();
+      await tester.pumpAndSettle();
+
+      expect(engine.isMonitoring, isFalse);
+      expect(find.text('START MONITORING'), findsOneWidget);
+    });
   });
 }

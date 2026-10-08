@@ -66,6 +66,9 @@ class MainActivity : FlutterActivity() {
             }
         }
 
+        // Initialize state now that all listeners and service bridges are wired
+        monitorEngine?.initialize()
+
         // ===== MethodChannel =====
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, METHOD_CHANNEL)
             .setMethodCallHandler { call, result ->
@@ -118,8 +121,13 @@ class MainActivity : FlutterActivity() {
 
         val serviceIntent = Intent(this, AudioMonitorService::class.java)
 
-        // Use startForegroundService for API 26+
-        ContextCompat.startForegroundService(this, serviceIntent)
+        try {
+            // Use startForegroundService for API 26+
+            ContextCompat.startForegroundService(this, serviceIntent)
+        } catch (e: Exception) {
+            // Android 12+ throws ForegroundServiceStartNotAllowedException if called from background without exemption
+            Log.w(TAG, "Unable to start foreground service from background: ${e.message}")
+        }
 
         // Also start the engine directly in case the service takes time to start
         monitorEngine?.startMonitoring()

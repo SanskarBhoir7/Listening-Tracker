@@ -190,7 +190,7 @@ class _MonitorDashboardState extends State<MonitorDashboard>
     }
   }
 
-  void _handleAudioEvent(Map<String, dynamic> event) {
+  Future<void> _handleAudioEvent(Map<String, dynamic> event) async {
     final type = event['type'] as String? ?? 'UNKNOWN';
     final deviceName = event['deviceName'] as String?;
     final previousDeviceName = event['previousDeviceName'] as String?;
@@ -208,17 +208,24 @@ class _MonitorDashboardState extends State<MonitorDashboard>
     }
     _addLogEntry(logEntry);
 
-    // Bluetooth connection lifecycle controls monitoring:
-    if (type == 'DEVICE_CONNECTED' && !_engine.isMonitoring) {
-      _engine.startMonitoring();
-    }
-
-    _engine.handleNativeEvent(event);
-
-    if (type == 'DEVICE_DISCONNECTED') {
-      if (_engine.connectedDevicesList.isEmpty && _engine.isMonitoring) {
-        _engine.stopMonitoring();
+    try {
+      // Bluetooth connection lifecycle controls monitoring:
+      if (type == 'DEVICE_CONNECTED' && !_engine.isMonitoring) {
+        _engine.startMonitoring();
       }
+
+      // Await database finalization & session reconciliation
+      await _engine.handleNativeEvent(event);
+
+      // Disconnect finalization order: SessionEngine closes sessions first, then monitoring stops
+      if (type == 'DEVICE_DISCONNECTED') {
+        if (_engine.connectedDevicesList.isEmpty && _engine.isMonitoring) {
+          await _engine.stopMonitoring();
+          if (mounted) setState(() {});
+        }
+      }
+    } catch (e) {
+      _addLogEntry('ERROR processing event $type: $e');
     }
   }
 

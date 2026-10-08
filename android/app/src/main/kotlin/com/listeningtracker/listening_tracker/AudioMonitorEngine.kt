@@ -180,8 +180,44 @@ class AudioMonitorEngine(private val context: Context) {
     init {
         // Always listen for audio device connections/disconnections
         audioManager.registerAudioDeviceCallback(audioDeviceCallback, mainHandler)
+    }
+
+    /**
+     * Initializes Bluetooth A2DP proxy and checks initial device connections.
+     * MUST be called AFTER eventListener and onMonitoringLifecycleRequested are attached
+     * to prevent invoking callbacks on null listeners.
+     */
+    fun initialize() {
         initBluetoothA2dp()
         checkInitialConnectedDevices()
+    }
+
+    /**
+     * Disposes the engine and releases all system callbacks and profile proxies.
+     */
+    fun dispose() {
+        stopMonitoring()
+        try {
+            audioManager.unregisterAudioDeviceCallback(audioDeviceCallback)
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to unregister audioDeviceCallback", e)
+        }
+
+        try {
+            bluetoothA2dp?.let { proxy ->
+                val bluetoothManager = context.getSystemService(Context.BLUETOOTH_SERVICE) as? BluetoothManager
+                val bluetoothAdapter = bluetoothManager?.adapter ?: BluetoothAdapter.getDefaultAdapter()
+                bluetoothAdapter?.closeProfileProxy(BluetoothProfile.A2DP, proxy)
+                bluetoothA2dp = null
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to close BluetoothA2dp proxy", e)
+        }
+
+        eventListener = null
+        onMonitoringLifecycleRequested = null
+        connectedAudioDevices.clear()
+        Log.d(TAG, "AudioMonitorEngine disposed")
     }
 
     private fun initBluetoothA2dp() {
@@ -198,7 +234,17 @@ class AudioMonitorEngine(private val context: Context) {
         val outputDevices = audioManager.getDevices(AudioManager.GET_DEVICES_OUTPUTS)
         for (device in outputDevices) {
             if (isTrackableDevice(device)) {
-                connectedAudioDevices[device.id] = AudioDeviceSnapshot.from(device)
+                val snapshot = AudioDeviceSnapshot.from(device)
+                connectedAudioDevices[device.id] = snapshot
+                eventListener?.onEvent(AudioEvent(
+                    type = AudioEventType.DEVICE_CONNECTED,
+                    deviceId = snapshot.id,
+                    deviceAddress = snapshot.address,
+                    deviceName = snapshot.name,
+                    deviceType = snapshot.typeName,
+                    connectionType = snapshot.connectionType,
+                    timestamp = System.currentTimeMillis()
+                ))
             }
         }
 
