@@ -102,9 +102,19 @@ class _MonitorDashboardState extends State<MonitorDashboard>
   Future<void> _initialize() async {
     await _engine.initialize();
     await _checkPermissions();
+    _ensureSubscribedToEvents();
     if (mounted) {
-      _autoStartMonitoringIfPermitted();
+      await _refreshCurrentState();
     }
+  }
+
+  void _ensureSubscribedToEvents() {
+    _eventSubscription ??= _audioService.audioEvents.listen(
+      _handleAudioEvent,
+      onError: (error) {
+        _addLogEntry('ERROR: $error');
+      },
+    );
   }
 
   @override
@@ -125,17 +135,6 @@ class _MonitorDashboardState extends State<MonitorDashboard>
     }
   }
 
-  bool _hasRequiredPermissions() {
-    return _permissions.isNotEmpty &&
-        _permissions.values.every((granted) => granted);
-  }
-
-  void _autoStartMonitoringIfPermitted() {
-    if (_hasRequiredPermissions() && !_engine.isMonitoring) {
-      _startMonitoring();
-    }
-  }
-
   Future<void> _checkPermissions() async {
     final perms = await _audioService.checkPermissions();
     if (mounted) {
@@ -150,7 +149,7 @@ class _MonitorDashboardState extends State<MonitorDashboard>
     await Future.delayed(const Duration(seconds: 2));
     await _checkPermissions();
     if (mounted) {
-      _autoStartMonitoringIfPermitted();
+      await _refreshCurrentState();
     }
   }
 
@@ -159,14 +158,7 @@ class _MonitorDashboardState extends State<MonitorDashboard>
     _isStartingMonitoring = true;
     try {
       _addLogEntry('MONITORING_STARTED');
-
-      _eventSubscription?.cancel();
-      _eventSubscription = _audioService.audioEvents.listen(
-        _handleAudioEvent,
-        onError: (error) {
-          _addLogEntry('ERROR: $error');
-        },
-      );
+      _ensureSubscribedToEvents();
 
       await _audioService.startMonitoring();
       _engine.startMonitoring();
@@ -181,14 +173,19 @@ class _MonitorDashboardState extends State<MonitorDashboard>
     if (!_engine.isMonitoring) return;
     _addLogEntry('MONITORING_STOPPED');
     await _audioService.stopMonitoring();
-    _eventSubscription?.cancel();
-    _eventSubscription = null;
     await _engine.stopMonitoring();
+    if (mounted) setState(() {});
   }
 
   Future<void> _refreshCurrentState() async {
     final state = await _audioService.getCurrentState();
     if (mounted && state.isNotEmpty && !state.containsKey('error')) {
+      final isMon = state['isMonitoring'] as bool? ?? false;
+      if (isMon && !_engine.isMonitoring) {
+        _engine.startMonitoring();
+      } else if (!isMon && _engine.isMonitoring && _engine.connectedDevicesList.isEmpty) {
+        await _engine.stopMonitoring();
+      }
       await _engine.processStateSnapshot(state);
     }
   }
@@ -197,6 +194,7 @@ class _MonitorDashboardState extends State<MonitorDashboard>
     final type = event['type'] as String? ?? 'UNKNOWN';
     final deviceName = event['deviceName'] as String?;
     final previousDeviceName = event['previousDeviceName'] as String?;
+    final diagnostics = event['diagnostics'] as String?;
 
     String logEntry = type;
     if (deviceName != null && deviceName.isNotEmpty) {
@@ -205,9 +203,23 @@ class _MonitorDashboardState extends State<MonitorDashboard>
     if (previousDeviceName != null) {
       logEntry += ' (was: $previousDeviceName)';
     }
+    if (diagnostics != null && diagnostics.isNotEmpty) {
+      logEntry += ' ($diagnostics)';
+    }
     _addLogEntry(logEntry);
 
+    // Bluetooth connection lifecycle controls monitoring:
+    if (type == 'DEVICE_CONNECTED' && !_engine.isMonitoring) {
+      _engine.startMonitoring();
+    }
+
     _engine.handleNativeEvent(event);
+
+    if (type == 'DEVICE_DISCONNECTED') {
+      if (_engine.connectedDevicesList.isEmpty && _engine.isMonitoring) {
+        _engine.stopMonitoring();
+      }
+    }
   }
 
   void _addLogEntry(String entry) {

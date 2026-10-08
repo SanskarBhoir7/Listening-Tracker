@@ -55,17 +55,24 @@ class AudioMonitorService : Service() {
 
         val notification = buildNotification()
 
-        // Start as foreground service with appropriate type
+        // Start as foreground service with appropriate type (connectedDevice on API 34+)
         try {
+            val fgsType = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+                ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE or ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE
+            } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE
+            } else {
+                0
+            }
             ServiceCompat.startForeground(
                 this,
                 NOTIFICATION_ID,
                 notification,
-                ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE
+                fgsType
             )
         } catch (e: Exception) {
             Log.e(TAG, "Failed to start foreground service", e)
-            // Fallback for older APIs where specialUse isn't required
+            // Fallback for older APIs where specific type isn't required
             startForeground(NOTIFICATION_ID, notification)
         }
 

@@ -5,12 +5,14 @@ import 'package:listening_tracker/audio_monitor_service.dart';
 import 'package:listening_tracker/database/database_adapter.dart';
 import 'package:listening_tracker/main.dart';
 import 'package:listening_tracker/session_engine.dart';
+import 'package:listening_tracker/tracking_state.dart';
 
 class FakeAudioMonitorService implements AudioMonitorService {
   final StreamController<Map<String, dynamic>> _controller =
       StreamController<Map<String, dynamic>>.broadcast();
 
   Map<String, bool> permissionsToReturn;
+  Map<String, dynamic> stateToReturn;
   int startMonitoringCallCount = 0;
   int stopMonitoringCallCount = 0;
   int requestPermissionsCallCount = 0;
@@ -19,6 +21,11 @@ class FakeAudioMonitorService implements AudioMonitorService {
     this.permissionsToReturn = const {
       'bluetooth_connect': true,
       'post_notifications': true,
+    },
+    this.stateToReturn = const {
+      'isMonitoring': false,
+      'isAudioPlaying': false,
+      'connectedDevices': [],
     },
   });
 
@@ -40,21 +47,28 @@ class FakeAudioMonitorService implements AudioMonitorService {
   @override
   Future<bool> startMonitoring() async {
     startMonitoringCallCount++;
+    stateToReturn = {
+      'isMonitoring': true,
+      'isAudioPlaying': false,
+      'connectedDevices': stateToReturn['connectedDevices'] ?? [],
+    };
     return true;
   }
 
   @override
   Future<bool> stopMonitoring() async {
     stopMonitoringCallCount++;
+    stateToReturn = {
+      'isMonitoring': false,
+      'isAudioPlaying': false,
+      'connectedDevices': stateToReturn['connectedDevices'] ?? [],
+    };
     return true;
   }
 
   @override
   Future<Map<String, dynamic>> getCurrentState() async {
-    return {
-      'isAudioPlaying': false,
-      'connectedDevices': [],
-    };
+    return stateToReturn;
   }
 
   void emitEvent(Map<String, dynamic> event) {
@@ -67,7 +81,7 @@ class FakeAudioMonitorService implements AudioMonitorService {
 }
 
 void main() {
-  group('Automatic Monitoring on Launch & Permission Grant', () {
+  group('Bluetooth-Driven Monitoring Lifecycle (Tests 8-13)', () {
     late InMemoryDatabaseAdapter db;
     late SessionEngine engine;
     late FakeAudioMonitorService fakeService;
@@ -94,122 +108,203 @@ void main() {
       );
     }
 
-    testWidgets('Automatically starts monitoring on app launch when permissions are available', (tester) async {
-      fakeService.permissionsToReturn = {
-        'bluetooth_connect': true,
-        'post_notifications': true,
-      };
-
+    testWidgets('Initial state with no Bluetooth audio device: monitoring remains OFF', (tester) async {
       await tester.pumpWidget(buildApp(service: fakeService));
       await tester.pumpAndSettle();
 
-      // Should automatically have started monitoring
-      expect(fakeService.startMonitoringCallCount, equals(1));
-      expect(engine.isMonitoring, isTrue);
+      expect(engine.isMonitoring, isFalse);
+      expect(find.text('START MONITORING'), findsOneWidget);
+      expect(find.text('IDLE (Monitoring Off)'), findsOneWidget);
+    });
 
-      // UI button displays STOP MONITORING
+    testWidgets('Test 8: Bluetooth connected => Monitoring starts automatically', (tester) async {
+      await tester.pumpWidget(buildApp(service: fakeService));
+      await tester.pumpAndSettle();
+
+      expect(engine.isMonitoring, isFalse);
+
+      // Bluetooth device connects
+      fakeService.emitEvent({
+        'type': 'DEVICE_CONNECTED',
+        'deviceName': 'realme Buds T200 Lite',
+        'connectionType': 'bluetooth',
+        'deviceType': 'Bluetooth A2DP',
+        'timestamp': DateTime.now().millisecondsSinceEpoch,
+      });
+      await tester.pumpAndSettle();
+
+      // Monitoring started automatically
+      expect(engine.isMonitoring, isTrue);
+      expect(engine.connectionState, equals(BluetoothConnectionState.connected));
       expect(find.text('STOP MONITORING'), findsOneWidget);
 
       await engine.stopMonitoring();
       await tester.pumpAndSettle();
     });
 
-    testWidgets('Does not start monitoring on launch if permissions are missing', (tester) async {
-      fakeService.permissionsToReturn = {
-        'bluetooth_connect': false,
-        'post_notifications': false,
-      };
-
+    testWidgets('Test 9: Duplicate Bluetooth connected => No duplicate monitoring instance', (tester) async {
       await tester.pumpWidget(buildApp(service: fakeService));
       await tester.pumpAndSettle();
 
-      // Monitoring must not have started
-      expect(fakeService.startMonitoringCallCount, equals(0));
-      expect(engine.isMonitoring, isFalse);
+      // Emit connected 3 times
+      for (int i = 0; i < 3; i++) {
+        fakeService.emitEvent({
+          'type': 'DEVICE_CONNECTED',
+          'deviceName': 'realme Buds T200 Lite',
+          'connectionType': 'bluetooth',
+          'deviceType': 'Bluetooth A2DP',
+          'timestamp': DateTime.now().millisecondsSinceEpoch,
+        });
+      }
+      await tester.pumpAndSettle();
 
-      // Permissions card is visible
-      expect(find.text('PERMISSIONS NEEDED'), findsOneWidget);
+      expect(engine.isMonitoring, isTrue);
+      expect(engine.connectedDevicesList.length, equals(1));
+
+      await engine.stopMonitoring();
+      await tester.pumpAndSettle();
+    });
+
+    testWidgets('Test 10: Bluetooth disconnected => Monitoring stops automatically', (tester) async {
+      await tester.pumpWidget(buildApp(service: fakeService));
+      await tester.pumpAndSettle();
+
+      // Connect device
+      fakeService.emitEvent({
+        'type': 'DEVICE_CONNECTED',
+        'deviceName': 'realme Buds T200 Lite',
+        'connectionType': 'bluetooth',
+        'deviceType': 'Bluetooth A2DP',
+        'timestamp': DateTime.now().millisecondsSinceEpoch,
+      });
+      await tester.pumpAndSettle();
+      expect(engine.isMonitoring, isTrue);
+
+      // Disconnect device
+      fakeService.emitEvent({
+        'type': 'DEVICE_DISCONNECTED',
+        'deviceName': 'realme Buds T200 Lite',
+        'connectionType': 'bluetooth',
+        'deviceType': 'Bluetooth A2DP',
+        'timestamp': DateTime.now().millisecondsSinceEpoch,
+      });
+      await tester.pumpAndSettle();
+
+      // Monitoring stops automatically
+      expect(engine.isMonitoring, isFalse);
+      expect(engine.connectionState, equals(BluetoothConnectionState.disconnected));
       expect(find.text('START MONITORING'), findsOneWidget);
     });
 
-    testWidgets('Starts monitoring automatically after user grants permissions', (tester) async {
-      fakeService.permissionsToReturn = {
-        'bluetooth_connect': false,
-        'post_notifications': false,
-      };
-
+    testWidgets('Test 11: Duplicate Bluetooth disconnected => No duplicate finalization', (tester) async {
       await tester.pumpWidget(buildApp(service: fakeService));
       await tester.pumpAndSettle();
 
-      expect(engine.isMonitoring, isFalse);
-      expect(fakeService.startMonitoringCallCount, equals(0));
-
-      // Tap Grant Permissions
-      await tester.tap(find.text('Grant Permissions'));
-      // Pump past delay in _requestPermissions
-      await tester.pump(const Duration(seconds: 3));
+      // Connect device
+      fakeService.emitEvent({
+        'type': 'DEVICE_CONNECTED',
+        'deviceName': 'realme Buds T200 Lite',
+        'connectionType': 'bluetooth',
+        'deviceType': 'Bluetooth A2DP',
+        'timestamp': DateTime.now().millisecondsSinceEpoch,
+      });
       await tester.pumpAndSettle();
 
-      // Permissions granted and monitoring auto-started
-      expect(fakeService.requestPermissionsCallCount, equals(1));
-      expect(fakeService.startMonitoringCallCount, equals(1));
+      // Disconnect device twice
+      fakeService.emitEvent({
+        'type': 'DEVICE_DISCONNECTED',
+        'deviceName': 'realme Buds T200 Lite',
+        'connectionType': 'bluetooth',
+        'deviceType': 'Bluetooth A2DP',
+        'timestamp': DateTime.now().millisecondsSinceEpoch,
+      });
+      fakeService.emitEvent({
+        'type': 'DEVICE_DISCONNECTED',
+        'deviceName': 'realme Buds T200 Lite',
+        'connectionType': 'bluetooth',
+        'deviceType': 'Bluetooth A2DP',
+        'timestamp': DateTime.now().millisecondsSinceEpoch,
+      });
+      await tester.pumpAndSettle();
+
+      expect(engine.isMonitoring, isFalse);
+      expect(engine.connectedDevicesList, isEmpty);
+    });
+
+    testWidgets('Test 12: Bluetooth connected but no audio => Monitoring ON, Listening OFF', (tester) async {
+      await tester.pumpWidget(buildApp(service: fakeService));
+      await tester.pumpAndSettle();
+
+      fakeService.emitEvent({
+        'type': 'DEVICE_CONNECTED',
+        'deviceName': 'realme Buds T200 Lite',
+        'connectionType': 'bluetooth',
+        'deviceType': 'Bluetooth A2DP',
+        'timestamp': DateTime.now().millisecondsSinceEpoch,
+      });
+      await tester.pumpAndSettle();
+
+      // Monitoring ON, but audio state is notPlaying
       expect(engine.isMonitoring, isTrue);
-      expect(find.text('STOP MONITORING'), findsOneWidget);
+      expect(engine.connectionState, equals(BluetoothConnectionState.connected));
+      expect(engine.sessionState, equals(ListeningSessionState.idle));
+      expect(find.text('CONNECTED (Idle / Silent)'), findsOneWidget);
 
       await engine.stopMonitoring();
       await tester.pumpAndSettle();
     });
 
-    testWidgets('Prevents duplicate monitoring when already active', (tester) async {
-      fakeService.permissionsToReturn = {
-        'bluetooth_connect': true,
-        'post_notifications': true,
-      };
-
+    testWidgets('Test 13: Bluetooth connected + audio => Monitoring ON, Listening ON', (tester) async {
       await tester.pumpWidget(buildApp(service: fakeService));
       await tester.pumpAndSettle();
 
-      expect(fakeService.startMonitoringCallCount, equals(1));
-      expect(engine.isMonitoring, isTrue);
-
-      // Manually trigger or pump: call count must remain 1
+      fakeService.emitEvent({
+        'type': 'DEVICE_CONNECTED',
+        'deviceName': 'realme Buds T200 Lite',
+        'connectionType': 'bluetooth',
+        'deviceType': 'Bluetooth A2DP',
+        'timestamp': DateTime.now().millisecondsSinceEpoch,
+      });
       await tester.pumpAndSettle();
-      expect(fakeService.startMonitoringCallCount, equals(1));
+
+      // Audio starts
+      fakeService.emitEvent({
+        'type': 'AUDIO_STARTED',
+        'deviceName': 'realme Buds T200 Lite',
+        'connectionType': 'bluetooth',
+        'deviceType': 'Bluetooth A2DP',
+        'diagnostics': 'configs=1, activeMedia=1, isMusicActive=true, isA2dp=true',
+        'timestamp': DateTime.now().millisecondsSinceEpoch,
+      });
+      await tester.pumpAndSettle();
+
+      expect(engine.isMonitoring, isTrue);
+      expect(engine.sessionState, equals(ListeningSessionState.active));
+      expect(find.text('LISTENING (Active)'), findsOneWidget);
 
       await engine.stopMonitoring();
       await tester.pumpAndSettle();
     });
 
-    testWidgets('Manual stop button successfully stops monitoring', (tester) async {
-      fakeService.permissionsToReturn = {
-        'bluetooth_connect': true,
-        'post_notifications': true,
-      };
-
+    testWidgets('Manual stop and resume button controls monitoring directly', (tester) async {
       await tester.pumpWidget(buildApp(service: fakeService));
       await tester.pumpAndSettle();
 
-      expect(engine.isMonitoring, isTrue);
-      expect(find.text('STOP MONITORING'), findsOneWidget);
-
-      // Tap STOP MONITORING
-      await tester.tap(find.text('STOP MONITORING'));
-      await tester.pumpAndSettle();
-
-      expect(fakeService.stopMonitoringCallCount, equals(1));
-      expect(engine.isMonitoring, isFalse);
-      expect(find.text('START MONITORING'), findsOneWidget);
-
-      // Tapping START MONITORING restarts it
+      // User manually starts monitoring
       await tester.tap(find.text('START MONITORING'));
       await tester.pumpAndSettle();
 
-      expect(fakeService.startMonitoringCallCount, equals(2));
       expect(engine.isMonitoring, isTrue);
+      expect(fakeService.startMonitoringCallCount, equals(1));
       expect(find.text('STOP MONITORING'), findsOneWidget);
 
-      await engine.stopMonitoring();
+      // User manually stops monitoring
+      await tester.tap(find.text('STOP MONITORING'));
       await tester.pumpAndSettle();
+
+      expect(engine.isMonitoring, isFalse);
+      expect(fakeService.stopMonitoringCallCount, equals(1));
+      expect(find.text('START MONITORING'), findsOneWidget);
     });
   });
 }

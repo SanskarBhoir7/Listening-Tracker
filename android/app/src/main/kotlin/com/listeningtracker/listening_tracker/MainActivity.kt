@@ -55,6 +55,17 @@ class MainActivity : FlutterActivity() {
         // Share the engine with the foreground service
         AudioMonitorService.monitorEngine = monitorEngine
 
+        // Wire Bluetooth-driven monitoring lifecycle to start/stop the foreground service
+        monitorEngine?.onMonitoringLifecycleRequested = { shouldStart ->
+            runOnUiThread {
+                if (shouldStart) {
+                    startMonitoringWithService()
+                } else {
+                    stopMonitoringWithService()
+                }
+            }
+        }
+
         // ===== MethodChannel =====
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, METHOD_CHANNEL)
             .setMethodCallHandler { call, result ->

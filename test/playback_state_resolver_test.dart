@@ -17,13 +17,14 @@ class PlaybackStateResolver {
   PlaybackTransition resolve({
     required bool hasMediaConfig,
     required bool isMusicActive,
+    bool isA2dpStreaming = false,
   }) {
-    final isAudioActive = hasMediaConfig || isMusicActive;
+    final isAudioActive = hasMediaConfig || isMusicActive || isA2dpStreaming;
 
     if (!_isPlaying && isAudioActive) {
       _isPlaying = true;
       return PlaybackTransition.started;
-    } else if (_isPlaying && !hasMediaConfig && !isMusicActive) {
+    } else if (_isPlaying && !hasMediaConfig && !isMusicActive && !isA2dpStreaming) {
       _isPlaying = false;
       return PlaybackTransition.stopped;
     } else {
@@ -31,116 +32,127 @@ class PlaybackStateResolver {
     }
   }
 
-  void reset({bool initialPlaying = false}) {
+  String getResolutionReason({
+    required bool hasMediaConfig,
+    required bool isMusicActive,
+    required bool isA2dpStreaming,
+  }) {
+    if (hasMediaConfig) return 'active_media_configuration';
+    if (isA2dpStreaming) return 'bluetooth_a2dp_streaming';
+    if (isMusicActive) return 'audio_manager_music_active';
+    return 'no_active_media_or_sound';
+  }
+
+  void reset([bool initialPlaying = false]) {
     _isPlaying = initialPlaying;
   }
 }
 
 void main() {
-  group('Native PlaybackStateResolver Specification Tests', () {
+  group('Native PlaybackStateResolver Specification Tests (Tests 1-7)', () {
     late PlaybackStateResolver resolver;
 
     setUp(() {
       resolver = PlaybackStateResolver();
     });
 
-    test('Test 1: Previous ACTIVE, config = none, isMusicActive = true => No AUDIO_STOPPED', () {
+    test('Test 1: Continuous playback with temporary configuration loss => No AUDIO_STOPPED', () {
       // Setup: initially playing
-      resolver.reset(initialPlaying: true);
+      resolver.reset(true);
       expect(resolver.isCurrentlyPlaying, isTrue);
 
-      // Media config temporarily disappears, but isMusicActive remains true
-      final transition = resolver.resolve(hasMediaConfig: false, isMusicActive: true);
+      // Media configuration temporarily disappears, but Bluetooth A2DP is still streaming or music is active
+      final transitionA = resolver.resolve(hasMediaConfig: false, isMusicActive: false, isA2dpStreaming: true);
+      expect(transitionA, equals(PlaybackTransition.none));
+      expect(resolver.isCurrentlyPlaying, isTrue);
 
-      // Must remain in active playing state and emit no STOPPED transition
-      expect(transition, equals(PlaybackTransition.none));
+      final transitionB = resolver.resolve(hasMediaConfig: false, isMusicActive: true, isA2dpStreaming: false);
+      expect(transitionB, equals(PlaybackTransition.none));
       expect(resolver.isCurrentlyPlaying, isTrue);
     });
 
-    test('Test 2: Previous ACTIVE, config = none, isMusicActive = false => One AUDIO_STOPPED', () {
-      // Setup: initially playing
-      resolver.reset(initialPlaying: true);
+    test('Test 2: playerState transitions (STARTED vs PAUSED) => Correct resolution', () {
+      resolver.reset(false);
+
+      // Player in STARTED state: hasMediaConfig is true
+      final startTransition = resolver.resolve(hasMediaConfig: true, isMusicActive: false);
+      expect(startTransition, equals(PlaybackTransition.started));
       expect(resolver.isCurrentlyPlaying, isTrue);
 
-      // Playback genuinely stopped
-      final transition = resolver.resolve(hasMediaConfig: false, isMusicActive: false);
-
-      // Transitions to inactive and emits STOPPED exactly once
-      expect(transition, equals(PlaybackTransition.stopped));
-      expect(resolver.isCurrentlyPlaying, isFalse);
-
-      // Subsequent identical inactive callback emits nothing
-      final nextTransition = resolver.resolve(hasMediaConfig: false, isMusicActive: false);
-      expect(nextTransition, equals(PlaybackTransition.none));
+      // Player transitions to PAUSED: hasMediaConfig becomes false, music not active, not streaming
+      final pauseTransition = resolver.resolve(hasMediaConfig: false, isMusicActive: false, isA2dpStreaming: false);
+      expect(pauseTransition, equals(PlaybackTransition.stopped));
       expect(resolver.isCurrentlyPlaying, isFalse);
     });
 
-    test('Test 3: Previous INACTIVE, current active playback, isMusicActive = true => One AUDIO_STARTED', () {
-      // Setup: initially inactive
-      resolver.reset(initialPlaying: false);
-      expect(resolver.isCurrentlyPlaying, isFalse);
+    test('Test 3: isMusicActive transitions => Triggers start and sustains playback', () {
+      resolver.reset(false);
 
-      // Playback starts
-      final transition = resolver.resolve(hasMediaConfig: true, isMusicActive: true);
+      // When config is delayed but isMusicActive is true, transitions to active
+      final startTransition = resolver.resolve(hasMediaConfig: false, isMusicActive: true);
+      expect(startTransition, equals(PlaybackTransition.started));
+      expect(resolver.isCurrentlyPlaying, isTrue);
 
-      // Transitions to active and emits STARTED exactly once
-      expect(transition, equals(PlaybackTransition.started));
+      // When isMusicActive drops but media config is present, remains active
+      final sustainTransition = resolver.resolve(hasMediaConfig: true, isMusicActive: false);
+      expect(sustainTransition, equals(PlaybackTransition.none));
       expect(resolver.isCurrentlyPlaying, isTrue);
     });
 
     test('Test 4: Multiple playback configs where one disappears but another remains => No AUDIO_STOPPED', () {
-      // Setup: initially playing
-      resolver.reset(initialPlaying: true);
+      resolver.reset(true);
 
-      // Scenario: Two playback configs were present, one disappears (e.g. system notification sound ends),
-      // but media stream remains. hasMediaConfig is still true.
-      final transition = resolver.resolve(hasMediaConfig: true, isMusicActive: true);
-
+      // Multiple configs exist (e.g. system sound ends, music remains) -> hasMediaConfig is true
+      final transition = resolver.resolve(hasMediaConfig: true, isMusicActive: true, isA2dpStreaming: true);
       expect(transition, equals(PlaybackTransition.none));
       expect(resolver.isCurrentlyPlaying, isTrue);
     });
 
-    test('Test 5: Repeated ACTIVE callbacks => No duplicate AUDIO_STARTED', () {
-      // Setup: start playback
-      final firstTransition = resolver.resolve(hasMediaConfig: true, isMusicActive: true);
-      expect(firstTransition, equals(PlaybackTransition.started));
-      expect(resolver.isCurrentlyPlaying, isTrue);
+    test('Test 5: Genuine pause => Emits AUDIO_STOPPED exactly once', () {
+      resolver.reset(true);
 
-      // Repeated active callbacks
-      for (int i = 0; i < 5; i++) {
-        final repeatTransition = resolver.resolve(hasMediaConfig: true, isMusicActive: true);
-        expect(repeatTransition, equals(PlaybackTransition.none),
-            reason: 'Callback iteration $i should not emit duplicate STARTED');
-      }
-      expect(resolver.isCurrentlyPlaying, isTrue);
+      // Genuine pause: all signals indicate no audio
+      final transition = resolver.resolve(hasMediaConfig: false, isMusicActive: false, isA2dpStreaming: false);
+      expect(transition, equals(PlaybackTransition.stopped));
+      expect(resolver.isCurrentlyPlaying, isFalse);
+      expect(resolver.getResolutionReason(hasMediaConfig: false, isMusicActive: false, isA2dpStreaming: false),
+          equals('no_active_media_or_sound'));
+
+      // Subsequent identical inactive call emits nothing
+      final repeat = resolver.resolve(hasMediaConfig: false, isMusicActive: false, isA2dpStreaming: false);
+      expect(repeat, equals(PlaybackTransition.none));
+      expect(resolver.isCurrentlyPlaying, isFalse);
     });
 
-    test('Test 6: Temporary config disappearance followed by config returning while music remains active => No STOPPED -> STARTED cycle', () {
-      // Step 1: Active music playback
-      final start = resolver.resolve(hasMediaConfig: true, isMusicActive: true);
-      expect(start, equals(PlaybackTransition.started));
-      expect(resolver.isCurrentlyPlaying, isTrue);
+    test('Test 6: Genuine resume => Emits AUDIO_STARTED exactly once', () {
+      resolver.reset(false);
 
-      // Step 2: ExoPlayer / track transition transiently drops config to 0, but isMusicActive is true
-      final transientDrop = resolver.resolve(hasMediaConfig: false, isMusicActive: true);
-      expect(transientDrop, equals(PlaybackTransition.none),
-          reason: 'Must NOT emit AUDIO_STOPPED during transient config drop');
-      expect(resolver.isCurrentlyPlaying, isTrue);
-
-      // Step 3: Config returns for new track
-      final configReturns = resolver.resolve(hasMediaConfig: true, isMusicActive: true);
-      expect(configReturns, equals(PlaybackTransition.none),
-          reason: 'Must NOT emit duplicate AUDIO_STARTED when config returns');
-      expect(resolver.isCurrentlyPlaying, isTrue);
-    });
-
-    test('Test 7: Start triggered by isMusicActive alone when config is delayed', () {
-      // Some players render audio before AudioPlaybackConfiguration is published
-      resolver.reset(initialPlaying: false);
-      final transition = resolver.resolve(hasMediaConfig: false, isMusicActive: true);
-
+      // Resumes playback
+      final transition = resolver.resolve(hasMediaConfig: true, isMusicActive: true, isA2dpStreaming: true);
       expect(transition, equals(PlaybackTransition.started));
       expect(resolver.isCurrentlyPlaying, isTrue);
+      expect(resolver.getResolutionReason(hasMediaConfig: true, isMusicActive: true, isA2dpStreaming: true),
+          equals('active_media_configuration'));
+    });
+
+    test('Test 7: No duplicate start/stop events across repeated identical states', () {
+      resolver.reset(false);
+
+      // Start once
+      expect(resolver.resolve(hasMediaConfig: true, isMusicActive: true), equals(PlaybackTransition.started));
+
+      // 5 repeated active calls => all none
+      for (int i = 0; i < 5; i++) {
+        expect(resolver.resolve(hasMediaConfig: true, isMusicActive: true), equals(PlaybackTransition.none));
+      }
+
+      // Stop once
+      expect(resolver.resolve(hasMediaConfig: false, isMusicActive: false), equals(PlaybackTransition.stopped));
+
+      // 5 repeated inactive calls => all none
+      for (int i = 0; i < 5; i++) {
+        expect(resolver.resolve(hasMediaConfig: false, isMusicActive: false), equals(PlaybackTransition.none));
+      }
     });
   });
 }

@@ -4,9 +4,11 @@
     <!-- BLUETOOTH_CONNECT is a runtime permission on API 31+ -->
     <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
 
-    <!-- Foreground service permission for background audio monitoring -->
+    <!-- Foreground service permission for background audio & connected Bluetooth device monitoring -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
-    <!-- Required on API 34+ to specify foreground service type -->
+    <!-- Required on API 34+ for Bluetooth/connected device monitoring -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE" />
+    <!-- Fallback on API 34+ for special use tracking -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
 
     <!-- POST_NOTIFICATIONS required on API 33+ for foreground service notification -->
@@ -40,11 +42,10 @@
         </activity>
 
         <!-- Foreground service for continuous audio/device monitoring when app is backgrounded.
-             We use specialUse because this is NOT a media player — it's a monitoring/tracking app.
-             mediaPlayback type is specifically for apps that play media, which we do not. -->
+             connectedDevice is the primary Android 14+ type for Bluetooth device interaction. -->
         <service
             android:name=".AudioMonitorService"
-            android:foregroundServiceType="specialUse"
+            android:foregroundServiceType="connectedDevice|specialUse"
             android:exported="false">
             <property
                 android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"

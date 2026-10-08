@@ -16,118 +16,120 @@ class PlaybackStateResolverTest {
     }
 
     /**
-     * Test 1:
-     * Previous ACTIVE
-     * Current config = none
-     * isMusicActive = true
-     * Expected: No AUDIO_STOPPED (PlaybackTransition.NONE), remains playing.
+     * Test 1: Continuous playback with temporary configuration loss.
+     * Expected: No AUDIO_STOPPED (PlaybackTransition.NONE) when Bluetooth A2DP or isMusicActive is true.
      */
     @Test
-    fun test1_activeToNoneWithMusicActive_emitsNone() {
+    fun test1_continuousPlaybackTemporaryConfigLoss_emitsNone() {
         resolver.reset(initialPlaying = true)
         assertTrue(resolver.isCurrentlyPlaying)
 
-        val transition = resolver.resolve(hasMediaConfig = false, isMusicActive = true)
+        // Config lost, but Bluetooth A2DP is streaming
+        val transitionA = resolver.resolve(hasMediaConfig = false, isMusicActive = false, isA2dpStreaming = true)
+        assertEquals(PlaybackTransition.NONE, transitionA)
+        assertTrue(resolver.isCurrentlyPlaying)
 
-        assertEquals(PlaybackTransition.NONE, transition)
+        // Config lost, but isMusicActive is true
+        val transitionB = resolver.resolve(hasMediaConfig = false, isMusicActive = true, isA2dpStreaming = false)
+        assertEquals(PlaybackTransition.NONE, transitionB)
         assertTrue(resolver.isCurrentlyPlaying)
     }
 
     /**
-     * Test 2:
-     * Previous ACTIVE
-     * Current config = none
-     * isMusicActive = false
-     * Expected: One AUDIO_STOPPED (PlaybackTransition.STOPPED), becomes inactive.
+     * Test 2: playerState transitions (STARTED vs PAUSED).
      */
     @Test
-    fun test2_activeToNoneWithNoMusic_emitsStoppedOnce() {
-        resolver.reset(initialPlaying = true)
-        assertTrue(resolver.isCurrentlyPlaying)
-
-        val transition = resolver.resolve(hasMediaConfig = false, isMusicActive = false)
-
-        assertEquals(PlaybackTransition.STOPPED, transition)
-        assertFalse(resolver.isCurrentlyPlaying)
-
-        // Repeated inactive call produces no transition
-        val nextTransition = resolver.resolve(hasMediaConfig = false, isMusicActive = false)
-        assertEquals(PlaybackTransition.NONE, nextTransition)
-        assertFalse(resolver.isCurrentlyPlaying)
-    }
-
-    /**
-     * Test 3:
-     * Previous INACTIVE
-     * Current active playback
-     * isMusicActive = true
-     * Expected: One AUDIO_STARTED (PlaybackTransition.STARTED).
-     */
-    @Test
-    fun test3_inactiveToActive_emitsStartedOnce() {
+    fun test2_playerStateTransitions_correctTransitions() {
         resolver.reset(initialPlaying = false)
+
+        // STARTED player state
+        val startTransition = resolver.resolve(hasMediaConfig = true, isMusicActive = false)
+        assertEquals(PlaybackTransition.STARTED, startTransition)
+        assertTrue(resolver.isCurrentlyPlaying)
+
+        // PAUSED player state and no music/A2DP active
+        val pauseTransition = resolver.resolve(hasMediaConfig = false, isMusicActive = false, isA2dpStreaming = false)
+        assertEquals(PlaybackTransition.STOPPED, pauseTransition)
         assertFalse(resolver.isCurrentlyPlaying)
+    }
 
-        val transition = resolver.resolve(hasMediaConfig = true, isMusicActive = true)
+    /**
+     * Test 3: isMusicActive transitions.
+     */
+    @Test
+    fun test3_isMusicActiveTransitions_triggersStartAndSustains() {
+        resolver.reset(initialPlaying = false)
 
-        assertEquals(PlaybackTransition.STARTED, transition)
+        val start = resolver.resolve(hasMediaConfig = false, isMusicActive = true)
+        assertEquals(PlaybackTransition.STARTED, start)
+        assertTrue(resolver.isCurrentlyPlaying)
+
+        val sustain = resolver.resolve(hasMediaConfig = true, isMusicActive = false)
+        assertEquals(PlaybackTransition.NONE, sustain)
         assertTrue(resolver.isCurrentlyPlaying)
     }
 
     /**
-     * Test 4:
-     * Multiple playback configurations where one disappears but another remains.
-     * Expected: No AUDIO_STOPPED.
+     * Test 4: Multiple playback configurations.
      */
     @Test
     fun test4_multipleConfigsOneDisappears_emitsNone() {
         resolver.reset(initialPlaying = true)
 
-        // hasMediaConfig is still true because another valid media stream remains
-        val transition = resolver.resolve(hasMediaConfig = true, isMusicActive = true)
-
+        val transition = resolver.resolve(hasMediaConfig = true, isMusicActive = true, isA2dpStreaming = true)
         assertEquals(PlaybackTransition.NONE, transition)
         assertTrue(resolver.isCurrentlyPlaying)
     }
 
     /**
-     * Test 5:
-     * Repeated ACTIVE callbacks.
-     * Expected: No duplicate AUDIO_STARTED.
+     * Test 5: Genuine pause.
      */
     @Test
-    fun test5_repeatedActiveCallbacks_noDuplicateStarted() {
-        val firstTransition = resolver.resolve(hasMediaConfig = true, isMusicActive = true)
-        assertEquals(PlaybackTransition.STARTED, firstTransition)
-        assertTrue(resolver.isCurrentlyPlaying)
+    fun test5_genuinePause_emitsStoppedOnce() {
+        resolver.reset(initialPlaying = true)
 
-        for (i in 1..5) {
-            val repeatTransition = resolver.resolve(hasMediaConfig = true, isMusicActive = true)
-            assertEquals(PlaybackTransition.NONE, repeatTransition)
-            assertTrue(resolver.isCurrentlyPlaying)
-        }
+        val transition = resolver.resolve(hasMediaConfig = false, isMusicActive = false, isA2dpStreaming = false)
+        assertEquals(PlaybackTransition.STOPPED, transition)
+        assertFalse(resolver.isCurrentlyPlaying)
+        assertEquals("no_active_media_or_sound", resolver.getResolutionReason(false, false, false))
+
+        val repeat = resolver.resolve(hasMediaConfig = false, isMusicActive = false, isA2dpStreaming = false)
+        assertEquals(PlaybackTransition.NONE, repeat)
+        assertFalse(resolver.isCurrentlyPlaying)
     }
 
     /**
-     * Test 6:
-     * Temporary config disappearance followed by config returning while music remains active.
-     * Expected: No STOPPED -> STARTED cycle.
+     * Test 6: Genuine resume.
      */
     @Test
-    fun test6_temporaryConfigDropThenReturn_noStoppedStartedCycle() {
-        // Step 1: Music starts
-        val startTransition = resolver.resolve(hasMediaConfig = true, isMusicActive = true)
-        assertEquals(PlaybackTransition.STARTED, startTransition)
-        assertTrue(resolver.isCurrentlyPlaying)
+    fun test6_genuineResume_emitsStartedOnce() {
+        resolver.reset(initialPlaying = false)
 
-        // Step 2: Track transition or offload momentarily drops config, but music is active
-        val dropTransition = resolver.resolve(hasMediaConfig = false, isMusicActive = true)
-        assertEquals(PlaybackTransition.NONE, dropTransition)
+        val transition = resolver.resolve(hasMediaConfig = true, isMusicActive = true, isA2dpStreaming = true)
+        assertEquals(PlaybackTransition.STARTED, transition)
         assertTrue(resolver.isCurrentlyPlaying)
+        assertEquals("active_media_configuration", resolver.getResolutionReason(true, true, true))
+    }
 
-        // Step 3: Config reappears for new track
-        val returnTransition = resolver.resolve(hasMediaConfig = true, isMusicActive = true)
-        assertEquals(PlaybackTransition.NONE, returnTransition)
-        assertTrue(resolver.isCurrentlyPlaying)
+    /**
+     * Test 7: No duplicate start/stop events across repeated identical states.
+     */
+    @Test
+    fun test7_repeatedIdenticalStates_noDuplicates() {
+        resolver.reset(initialPlaying = false)
+
+        val start = resolver.resolve(hasMediaConfig = true, isMusicActive = true)
+        assertEquals(PlaybackTransition.STARTED, start)
+
+        for (i in 1..5) {
+            assertEquals(PlaybackTransition.NONE, resolver.resolve(hasMediaConfig = true, isMusicActive = true))
+        }
+
+        val stop = resolver.resolve(hasMediaConfig = false, isMusicActive = false)
+        assertEquals(PlaybackTransition.STOPPED, stop)
+
+        for (i in 1..5) {
+            assertEquals(PlaybackTransition.NONE, resolver.resolve(hasMediaConfig = false, isMusicActive = false))
+        }
     }
 }
