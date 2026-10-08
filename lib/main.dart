@@ -97,9 +97,14 @@ class _MonitorDashboardState extends State<MonitorDashboard>
     _initialize();
   }
 
+  bool _isStartingMonitoring = false;
+
   Future<void> _initialize() async {
     await _engine.initialize();
     await _checkPermissions();
+    if (mounted) {
+      _autoStartMonitoringIfPermitted();
+    }
   }
 
   @override
@@ -120,6 +125,17 @@ class _MonitorDashboardState extends State<MonitorDashboard>
     }
   }
 
+  bool _hasRequiredPermissions() {
+    return _permissions.isNotEmpty &&
+        _permissions.values.every((granted) => granted);
+  }
+
+  void _autoStartMonitoringIfPermitted() {
+    if (_hasRequiredPermissions() && !_engine.isMonitoring) {
+      _startMonitoring();
+    }
+  }
+
   Future<void> _checkPermissions() async {
     final perms = await _audioService.checkPermissions();
     if (mounted) {
@@ -133,25 +149,36 @@ class _MonitorDashboardState extends State<MonitorDashboard>
     await _audioService.requestPermissions();
     await Future.delayed(const Duration(seconds: 2));
     await _checkPermissions();
+    if (mounted) {
+      _autoStartMonitoringIfPermitted();
+    }
   }
 
   Future<void> _startMonitoring() async {
-    _addLogEntry('MONITORING_STARTED');
+    if (_isStartingMonitoring || _engine.isMonitoring) return;
+    _isStartingMonitoring = true;
+    try {
+      _addLogEntry('MONITORING_STARTED');
 
-    _eventSubscription = _audioService.audioEvents.listen(
-      _handleAudioEvent,
-      onError: (error) {
-        _addLogEntry('ERROR: $error');
-      },
-    );
+      _eventSubscription?.cancel();
+      _eventSubscription = _audioService.audioEvents.listen(
+        _handleAudioEvent,
+        onError: (error) {
+          _addLogEntry('ERROR: $error');
+        },
+      );
 
-    await _audioService.startMonitoring();
-    _engine.startMonitoring();
+      await _audioService.startMonitoring();
+      _engine.startMonitoring();
 
-    await _refreshCurrentState();
+      await _refreshCurrentState();
+    } finally {
+      _isStartingMonitoring = false;
+    }
   }
 
   Future<void> _stopMonitoring() async {
+    if (!_engine.isMonitoring) return;
     _addLogEntry('MONITORING_STOPPED');
     await _audioService.stopMonitoring();
     _eventSubscription?.cancel();

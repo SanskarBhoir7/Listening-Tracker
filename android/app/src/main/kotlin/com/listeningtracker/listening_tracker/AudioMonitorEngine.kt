@@ -40,8 +40,12 @@ class AudioMonitorEngine(private val context: Context) {
     // Listener interface for Flutter bridge
     var eventListener: AudioEventListener? = null
 
-    // Track last known state to detect changes
-    private var lastActivePlaybackCount = 0
+    // Track monitoring status to prevent duplicate callbacks or registrations
+    private var isMonitoring = false
+
+    // State resolver reconciling AudioPlaybackConfiguration + AudioManager.isMusicActive()
+    private val playbackResolver = PlaybackStateResolver()
+
     private var lastOutputDeviceType: Int = AudioDeviceInfo.TYPE_BUILTIN_SPEAKER
     private var lastOutputDeviceName: String = "Phone Speaker"
 
@@ -114,6 +118,11 @@ class AudioMonitorEngine(private val context: Context) {
     // =========================================================================
 
     fun startMonitoring() {
+        if (isMonitoring) {
+            Log.d(TAG, "Audio monitoring already running; ignoring duplicate start")
+            return
+        }
+        isMonitoring = true
         Log.d(TAG, "Starting audio monitoring")
 
         // Register for device connection/disconnection events
@@ -127,17 +136,27 @@ class AudioMonitorEngine(private val context: Context) {
     }
 
     fun stopMonitoring() {
+        if (!isMonitoring) {
+            Log.d(TAG, "Audio monitoring not running; ignoring stop")
+            return
+        }
+        isMonitoring = false
         Log.d(TAG, "Stopping audio monitoring")
         audioManager.unregisterAudioDeviceCallback(audioDeviceCallback)
         audioManager.unregisterAudioPlaybackCallback(audioPlaybackCallback)
+        playbackResolver.reset(false)
+        connectedAudioDevices.clear()
     }
 
     /**
      * Returns the current state as a map suitable for sending to Flutter.
+     * Evaluates both playback configs and AudioManager.isMusicActive().
      */
     fun getCurrentState(): Map<String, Any?> {
         val configs = audioManager.activePlaybackConfigurations
-        val isPlaying = hasMediaPlayback(configs)
+        val hasMedia = hasMediaPlayback(configs)
+        val isMusicActive = queryIsMusicActive()
+        val isPlaying = hasMedia || isMusicActive
         val outputDevice = getCurrentOutputDevice()
         val outputAddress = if (outputDevice != null && android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.P) {
             try { outputDevice.address ?: "" } catch (e: Exception) { "" }
@@ -168,9 +187,11 @@ class AudioMonitorEngine(private val context: Context) {
             }
         }
 
-        // Check current playback state
+        // Check current playback state with dual signals
         val configs = audioManager.activePlaybackConfigurations
-        lastActivePlaybackCount = countMediaPlaybacks(configs)
+        val hasMedia = hasMediaPlayback(configs)
+        val isMusicActive = queryIsMusicActive()
+        playbackResolver.reset(hasMedia || isMusicActive)
 
         // Identify current output device
         val outputDevice = getCurrentOutputDevice()
@@ -180,23 +201,38 @@ class AudioMonitorEngine(private val context: Context) {
         }
 
         Log.d(TAG, "Initial state: ${connectedAudioDevices.size} trackable devices, " +
-                "$lastActivePlaybackCount active playbacks, output=$lastOutputDeviceName")
+                "hasMedia=$hasMedia, isMusicActive=$isMusicActive, isPlaying=${playbackResolver.isCurrentlyPlaying}, output=$lastOutputDeviceName")
     }
 
     /**
-     * Process playback configuration changes.
-     * This is the core mechanism for detecting AUDIO_STARTED and AUDIO_STOPPED.
+     * Safely queries AudioManager.isMusicActive() with exception guard.
+     */
+    private fun queryIsMusicActive(): Boolean {
+        return try {
+            audioManager.isMusicActive
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to query isMusicActive", e)
+            false
+        }
+    }
+
+    /**
+     * Process playback configuration changes using the dual-signal resolver.
      *
-     * Note: Android's AudioPlaybackCallback fires when any app starts or stops
-     * audio playback. It provides a list of ALL current active playback configs.
-     * We compare with the previous count to determine transitions.
+     * State transition rules:
+     * - INACTIVE -> ACTIVE: emits AUDIO_STARTED
+     * - ACTIVE -> ACTIVE: emits nothing
+     * - ACTIVE -> (hasMedia=false, isMusicActive=true): emits nothing (tolerates transient drops during music)
+     * - ACTIVE -> (hasMedia=false, isMusicActive=false): emits AUDIO_STOPPED
+     * - INACTIVE -> INACTIVE: emits nothing
      */
     private fun processPlaybackConfigs(configs: MutableList<AudioPlaybackConfiguration>) {
-        val currentMediaCount = countMediaPlaybacks(configs)
-        val wasPlaying = lastActivePlaybackCount > 0
-        val isPlaying = currentMediaCount > 0
+        val hasMedia = hasMediaPlayback(configs)
+        val isMusicActive = queryIsMusicActive()
 
-        Log.d(TAG, "Playback config changed: was=$lastActivePlaybackCount, now=$currentMediaCount")
+        val transition = playbackResolver.resolve(hasMedia, isMusicActive)
+
+        Log.d(TAG, "Playback config changed: hasMedia=$hasMedia, isMusicActive=$isMusicActive, transition=$transition")
 
         val currentOutput = getCurrentOutputDevice()
         val currentType = currentOutput?.type ?: lastOutputDeviceType
@@ -205,33 +241,37 @@ class AudioMonitorEngine(private val context: Context) {
             try { currentOutput.address ?: "" } catch (e: Exception) { "" }
         } else ""
 
-        if (!wasPlaying && isPlaying) {
-            // Audio started
-            eventListener?.onEvent(AudioEvent(
-                type = AudioEventType.AUDIO_STARTED,
-                timestamp = System.currentTimeMillis(),
-                isAudioPlaying = true,
-                deviceId = currentOutput?.id,
-                deviceAddress = outputAddress,
-                deviceName = currentName,
-                deviceType = getDeviceTypeName(currentType),
-                connectionType = getConnectionType(currentType)
-            ))
-        } else if (wasPlaying && !isPlaying) {
-            // Audio stopped
-            eventListener?.onEvent(AudioEvent(
-                type = AudioEventType.AUDIO_STOPPED,
-                timestamp = System.currentTimeMillis(),
-                isAudioPlaying = false,
-                deviceId = currentOutput?.id,
-                deviceAddress = outputAddress,
-                deviceName = currentName,
-                deviceType = getDeviceTypeName(currentType),
-                connectionType = getConnectionType(currentType)
-            ))
+        when (transition) {
+            PlaybackTransition.STARTED -> {
+                Log.d(TAG, "Emitting AUDIO_STARTED for $currentName")
+                eventListener?.onEvent(AudioEvent(
+                    type = AudioEventType.AUDIO_STARTED,
+                    timestamp = System.currentTimeMillis(),
+                    isAudioPlaying = true,
+                    deviceId = currentOutput?.id,
+                    deviceAddress = outputAddress,
+                    deviceName = currentName,
+                    deviceType = getDeviceTypeName(currentType),
+                    connectionType = getConnectionType(currentType)
+                ))
+            }
+            PlaybackTransition.STOPPED -> {
+                Log.d(TAG, "Emitting AUDIO_STOPPED for $currentName")
+                eventListener?.onEvent(AudioEvent(
+                    type = AudioEventType.AUDIO_STOPPED,
+                    timestamp = System.currentTimeMillis(),
+                    isAudioPlaying = false,
+                    deviceId = currentOutput?.id,
+                    deviceAddress = outputAddress,
+                    deviceName = currentName,
+                    deviceType = getDeviceTypeName(currentType),
+                    connectionType = getConnectionType(currentType)
+                ))
+            }
+            PlaybackTransition.NONE -> {
+                // No transition, stay in current state (e.g. transient config disappearance during active music)
+            }
         }
-
-        lastActivePlaybackCount = currentMediaCount
 
         // Also check if the output device has changed
         checkAudioOutputChange()
