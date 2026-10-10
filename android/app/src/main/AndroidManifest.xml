@@ -1,6 +1,8 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
     <!-- Bluetooth permissions for detecting BT audio devices -->
+    <uses-permission android:name="android.permission.BLUETOOTH" android:maxSdkVersion="30" />
+    <uses-permission android:name="android.permission.BLUETOOTH_ADMIN" android:maxSdkVersion="30" />
     <!-- BLUETOOTH_CONNECT is a runtime permission on API 31+ -->
     <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
 
@@ -13,6 +15,14 @@
 
     <!-- POST_NOTIFICATIONS required on API 33+ for foreground service notification -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
+    <!-- Companion Device permissions for system-managed wake-up and FGS exemption on API 31+ -->
+    <uses-permission android:name="android.permission.REQUEST_COMPANION_RUN_IN_BACKGROUND" />
+    <uses-permission android:name="android.permission.REQUEST_COMPANION_START_FOREGROUND_SERVICES_FROM_BACKGROUND" />
+    <uses-permission android:name="android.permission.REQUEST_COMPANION_USE_DATA_IN_BACKGROUND" />
+
+    <!-- Battery optimization exemption request for background execution -->
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
 
     <application
         android:label="Listening Tracker"
@@ -41,6 +51,28 @@
             </intent-filter>
         </activity>
 
+        <!-- Persistent system-managed Bluetooth connection observer:
+             Wakes the app process when earbuds connect/disconnect without requiring manual app launch -->
+        <receiver
+            android:name=".BluetoothConnectionReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.bluetooth.device.action.ACL_CONNECTED" />
+                <action android:name="android.bluetooth.device.action.ACL_DISCONNECTED" />
+                <action android:name="android.bluetooth.a2dp.profile.action.CONNECTION_STATE_CHANGED" />
+            </intent-filter>
+        </receiver>
+
+        <!-- CompanionDeviceService bound by Android OS when companion devices connect/disconnect -->
+        <service
+            android:name=".BluetoothCompanionService"
+            android:permission="android.permission.BIND_COMPANION_DEVICE_SERVICE"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.companion.CompanionDeviceService" />
+            </intent-filter>
+        </service>
+
         <!-- Foreground service for continuous audio/device monitoring when app is backgrounded.
              connectedDevice is the primary Android 14+ type for Bluetooth device interaction. -->
         <service
@@ -51,6 +83,16 @@
                 android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
                 android:value="Audio device and playback state monitoring for listening duration tracking" />
         </service>
+
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.fileprovider"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/file_paths" />
+        </provider>
 
         <!-- Don't delete the meta-data below.
              This is used by the Flutter tool to generate GeneratedPluginRegistrant.java -->

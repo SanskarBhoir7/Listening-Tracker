@@ -1,12 +1,16 @@
 import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+
 import 'audio_monitor_service.dart';
 import 'database/database_adapter.dart';
 import 'database/database_helper.dart';
 import 'session_engine.dart';
 import 'tracking_state.dart';
+import 'services/diagnostic_logger.dart';
 import 'views/analytics_view.dart';
+import 'views/diagnostic_log_viewer.dart';
 import 'views/history_view.dart';
 
 void main() {
@@ -62,7 +66,8 @@ class _MonitorDashboardState extends State<MonitorDashboard>
 
   // Global keys to trigger reloads on child views
   final GlobalKey<HistoryViewState> _historyKey = GlobalKey<HistoryViewState>();
-  final GlobalKey<AnalyticsViewState> _analyticsKey = GlobalKey<AnalyticsViewState>();
+  final GlobalKey<AnalyticsViewState> _analyticsKey =
+      GlobalKey<AnalyticsViewState>();
 
   // Permissions state
   Map<String, bool> _permissions = {};
@@ -94,17 +99,72 @@ class _MonitorDashboardState extends State<MonitorDashboard>
       _addLogEntry(msg);
     };
 
+    // Configure persistent diagnostic logger with active database
+    DiagnosticLogger.instance.setDatabase(_database);
+
     _initialize();
   }
 
   bool _isStartingMonitoring = false;
 
   Future<void> _initialize() async {
+    await DiagnosticLogger.instance.logLifecycle(
+      'FLUTTER_APP_INITIALIZATION_STARTED',
+      source: 'flutter',
+    );
     await _engine.initialize();
+    await _loadPersistedLogs();
     await _checkPermissions();
+    await _importNativeLifecycleEvents();
     _ensureSubscribedToEvents();
     if (mounted) {
       await _refreshCurrentState();
+    }
+  }
+
+  Future<void> _importNativeLifecycleEvents() async {
+    final events = await _audioService.drainNativeLifecycleEvents();
+    final importedIds = <String>[];
+    for (final event in events) {
+      final details = Map<String, dynamic>.from(
+        event['details'] as Map? ?? const {},
+      );
+      details['nativeEventId'] = event['id'];
+      details['nativeProcessId'] = event['processId'];
+      final persisted = await DiagnosticLogger.instance.logEvent(
+        eventId: 'native_${event['id']}',
+        eventType: event['eventType'] as String? ?? 'NATIVE_LIFECYCLE_UNKNOWN',
+        source: 'native_lifecycle',
+        timestampMs: event['timestamp'] as int?,
+        rawPayload: details,
+      );
+      if (persisted != null) importedIds.add(event['id'] as String);
+    }
+    await _audioService.acknowledgeNativeLifecycleEvents(importedIds);
+  }
+
+  Future<void> _loadPersistedLogs() async {
+    try {
+      final savedEvents = await _database.getDiagnosticEvents(limit: 50);
+      if (mounted && savedEvents.isNotEmpty) {
+        setState(() {
+          _eventLog.clear();
+          for (final event in savedEvents) {
+            String line = '${event.timeClock} ${event.eventType}';
+            if (event.deviceName != null && event.deviceName!.isNotEmpty) {
+              line += ' | ${event.deviceName}';
+            }
+            if (event.playbackSignalsSummary.isNotEmpty) {
+              line += ' (${event.playbackSignalsSummary})';
+            } else if (event.reason != null && event.reason!.isNotEmpty) {
+              line += ' (${event.reason})';
+            }
+            _eventLog.add(line);
+          }
+        });
+      }
+    } catch (e) {
+      debugPrint('Failed to load persisted diagnostic logs: $e');
     }
   }
 
@@ -113,6 +173,11 @@ class _MonitorDashboardState extends State<MonitorDashboard>
       _handleAudioEvent,
       onError: (error) {
         _addLogEntry('ERROR: $error');
+        DiagnosticLogger.instance.logEvent(
+          eventType: 'ERROR',
+          source: 'flutter',
+          errorDetails: '$error',
+        );
       },
     );
   }
@@ -130,6 +195,10 @@ class _MonitorDashboardState extends State<MonitorDashboard>
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     _addLogEntry('LIFECYCLE: ${state.name.toUpperCase()}');
+    DiagnosticLogger.instance.logLifecycle(
+      'APP_LIFECYCLE_${state.name.toUpperCase()}',
+      source: 'flutter',
+    );
     if (state == AppLifecycleState.resumed && _engine.isMonitoring) {
       _refreshCurrentState();
     }
@@ -157,13 +226,31 @@ class _MonitorDashboardState extends State<MonitorDashboard>
     if (_isStartingMonitoring || _engine.isMonitoring) return;
     _isStartingMonitoring = true;
     try {
-      _addLogEntry('MONITORING_STARTED');
+      _addLogEntry('MONITORING_START_REQUESTED');
+      DiagnosticLogger.instance.logEvent(
+        eventType: 'MONITORING_START_REQUESTED',
+        source: 'flutter',
+        reason: 'User or system initiated monitoring',
+      );
       _ensureSubscribedToEvents();
 
-      await _audioService.startMonitoring();
-      _engine.startMonitoring();
+      final accepted = await _audioService.startMonitoring();
+      if (!accepted) {
+        throw StateError('Native monitoring service start was rejected');
+      }
 
       await _refreshCurrentState();
+    } catch (e) {
+      DiagnosticLogger.instance.logEvent(
+        eventType: 'MONITORING_START_FAILED',
+        source: 'flutter',
+        errorDetails: '$e',
+      );
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Monitoring could not start: $e')),
+        );
+      }
     } finally {
       _isStartingMonitoring = false;
     }
@@ -172,18 +259,38 @@ class _MonitorDashboardState extends State<MonitorDashboard>
   Future<void> _stopMonitoring() async {
     if (!_engine.isMonitoring) return;
     _addLogEntry('MONITORING_STOPPED');
+    DiagnosticLogger.instance.logEvent(
+      eventType: 'MONITORING_STOPPED',
+      source: 'flutter',
+      reason: 'User or system stopped monitoring',
+    );
     await _audioService.stopMonitoring();
     await _engine.stopMonitoring();
     if (mounted) setState(() {});
   }
 
   Future<void> _refreshCurrentState() async {
+    DiagnosticLogger.instance.logEvent(
+      eventType: 'FLUTTER_SNAPSHOT_RECOVERY_REQUESTED',
+      source: 'flutter',
+      reason: 'Refreshing native monitoring state',
+    );
     final state = await _audioService.getCurrentState();
+    DiagnosticLogger.instance.logEvent(
+      eventType: 'FLUTTER_SNAPSHOT_RECOVERY_COMPLETED',
+      source: 'flutter',
+      rawPayload: {
+        'nativeMonitoring': state['isMonitoring'],
+        'connectedDeviceCount':
+            (state['connectedDevices'] as List?)?.length ?? 0,
+        'hasError': state.containsKey('error'),
+      },
+    );
     if (mounted && state.isNotEmpty && !state.containsKey('error')) {
       final isMon = state['isMonitoring'] as bool? ?? false;
       if (isMon && !_engine.isMonitoring) {
         _engine.startMonitoring();
-      } else if (!isMon && _engine.isMonitoring && _engine.connectedDevicesList.isEmpty) {
+      } else if (!isMon && _engine.isMonitoring) {
         await _engine.stopMonitoring();
       }
       await _engine.processStateSnapshot(state);
@@ -192,6 +299,20 @@ class _MonitorDashboardState extends State<MonitorDashboard>
 
   Future<void> _handleAudioEvent(Map<String, dynamic> event) async {
     final type = event['type'] as String? ?? 'UNKNOWN';
+    if (type == 'MONITORING_STATE_CHANGED') {
+      final active = event['isMonitoring'] as bool? ?? false;
+      if (active && !_engine.isMonitoring) {
+        _engine.startMonitoring();
+      } else if (!active && _engine.isMonitoring) {
+        await _engine.stopMonitoring();
+      }
+      DiagnosticLogger.instance.logEvent(
+        eventType: active ? 'MONITORING_ACTIVE' : 'MONITORING_INACTIVE',
+        source: 'native',
+        reason: event['reason'] as String?,
+      );
+      return;
+    }
     final deviceName = event['deviceName'] as String?;
     final previousDeviceName = event['previousDeviceName'] as String?;
     final diagnostics = event['diagnostics'] as String?;
@@ -208,12 +329,11 @@ class _MonitorDashboardState extends State<MonitorDashboard>
     }
     _addLogEntry(logEntry);
 
+    // Save native event to persistent diagnostic log
+    DiagnosticLogger.instance.logNativeAudioEvent(event);
+
     try {
       // Bluetooth connection lifecycle controls monitoring:
-      if (type == 'DEVICE_CONNECTED' && !_engine.isMonitoring) {
-        _engine.startMonitoring();
-      }
-
       // Await database finalization & session reconciliation
       await _engine.handleNativeEvent(event);
 
@@ -226,6 +346,12 @@ class _MonitorDashboardState extends State<MonitorDashboard>
       }
     } catch (e) {
       _addLogEntry('ERROR processing event $type: $e');
+      await DiagnosticLogger.instance.logEvent(
+        eventType: 'ERROR_PROCESSING_EVENT',
+        source: 'flutter',
+        errorDetails: '$e',
+        rawPayload: {'originalEvent': event},
+      );
     }
   }
 
@@ -246,9 +372,8 @@ class _MonitorDashboardState extends State<MonitorDashboard>
   }
 
   String _computeCurrentState() {
-    if (!_engine.isMonitoring) return 'IDLE (Monitoring Off)';
-
-    final isBtConnected = _engine.connectionState == BluetoothConnectionState.connected;
+    final isBtConnected =
+        _engine.connectionState == BluetoothConnectionState.connected;
     final isListening = _engine.sessionState == ListeningSessionState.active;
     final inGrace = _engine.sessionState == ListeningSessionState.gracePeriod;
     final isAudioPlaying = _engine.audioState == AudioPlaybackState.playing;
@@ -258,7 +383,11 @@ class _MonitorDashboardState extends State<MonitorDashboard>
       final rem = _engine.gracePeriodRemaining?.inSeconds ?? 0;
       return 'PAUSED (Grace: ${rem}s)';
     }
+    if (isBtConnected && !_engine.isMonitoring) {
+      return 'CONNECTED (Monitoring Inactive)';
+    }
     if (isBtConnected && !isAudioPlaying) return 'CONNECTED (Idle / Silent)';
+    if (!_engine.isMonitoring) return 'IDLE (Monitoring Off)';
     if (!isBtConnected && isAudioPlaying) return 'PLAYING (Phone Speaker)';
     return 'STANDBY (No Device)';
   }
@@ -325,7 +454,9 @@ class _MonitorDashboardState extends State<MonitorDashboard>
                   },
             tooltip: _selectedTabIndex == 1
                 ? 'Refresh history'
-                : (_selectedTabIndex == 2 ? 'Refresh analytics' : 'Refresh state'),
+                : (_selectedTabIndex == 2
+                      ? 'Refresh analytics'
+                      : 'Refresh state'),
           ),
         ],
       ),
@@ -397,8 +528,15 @@ class _MonitorDashboardState extends State<MonitorDashboard>
   }
 
   Widget _buildPermissionsCard() {
-    final allGranted = _permissions.values.isNotEmpty &&
-        _permissions.values.every((granted) => granted);
+    final runtimePerms = {
+      if (_permissions.containsKey('bluetooth_connect'))
+        'bluetooth_connect': _permissions['bluetooth_connect']!,
+      if (_permissions.containsKey('post_notifications'))
+        'post_notifications': _permissions['post_notifications']!,
+    };
+    final allGranted =
+        runtimePerms.values.isNotEmpty &&
+        runtimePerms.values.every((granted) => granted);
 
     if (allGranted) return const SizedBox.shrink();
 
@@ -414,16 +552,18 @@ class _MonitorDashboardState extends State<MonitorDashboard>
               style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13),
             ),
             const SizedBox(height: 6),
-            ..._permissions.entries.map((entry) => Padding(
-                  padding: const EdgeInsets.symmetric(vertical: 2),
-                  child: Text(
-                    '${entry.key}: ${entry.value ? "✅ Granted" : "❌ Not granted"}',
-                    style: TextStyle(
-                      color: entry.value ? Colors.greenAccent : Colors.redAccent,
-                      fontSize: 12,
-                    ),
+            ...runtimePerms.entries.map(
+              (entry) => Padding(
+                padding: const EdgeInsets.symmetric(vertical: 2),
+                child: Text(
+                  '${entry.key}: ${entry.value ? "✅ Granted" : "❌ Not granted"}',
+                  style: TextStyle(
+                    color: entry.value ? Colors.greenAccent : Colors.redAccent,
+                    fontSize: 12,
                   ),
-                )),
+                ),
+              ),
+            ),
             const SizedBox(height: 8),
             ElevatedButton.icon(
               onPressed: _requestPermissions,
@@ -432,7 +572,10 @@ class _MonitorDashboardState extends State<MonitorDashboard>
               style: ElevatedButton.styleFrom(
                 backgroundColor: Colors.amber.shade800,
                 foregroundColor: Colors.white,
-                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 16,
+                  vertical: 8,
+                ),
               ),
             ),
           ],
@@ -535,7 +678,8 @@ class _MonitorDashboardState extends State<MonitorDashboard>
   }
 
   Widget _buildDualDurationCard() {
-    final isBtConnected = _engine.connectionState == BluetoothConnectionState.connected;
+    final isBtConnected =
+        _engine.connectionState == BluetoothConnectionState.connected;
     final isListening = _engine.sessionState == ListeningSessionState.active;
     final inGrace = _engine.sessionState == ListeningSessionState.gracePeriod;
 
@@ -549,7 +693,9 @@ class _MonitorDashboardState extends State<MonitorDashboard>
               color: Colors.cyan.shade900.withValues(alpha: 0.25),
               borderRadius: BorderRadius.circular(10),
               border: Border.all(
-                color: isBtConnected ? Colors.cyanAccent.shade400 : Colors.cyan.shade900,
+                color: isBtConnected
+                    ? Colors.cyanAccent.shade400
+                    : Colors.cyan.shade900,
                 width: 1.5,
               ),
             ),
@@ -582,7 +728,9 @@ class _MonitorDashboardState extends State<MonitorDashboard>
                   isBtConnected ? 'Connected' : 'Disconnected',
                   style: TextStyle(
                     fontSize: 11,
-                    color: isBtConnected ? Colors.cyanAccent : Colors.grey.shade500,
+                    color: isBtConnected
+                        ? Colors.cyanAccent
+                        : Colors.grey.shade500,
                   ),
                 ),
               ],
@@ -601,8 +749,8 @@ class _MonitorDashboardState extends State<MonitorDashboard>
                 color: isListening
                     ? Colors.greenAccent.shade400
                     : inGrace
-                        ? Colors.amberAccent.shade400
-                        : Colors.green.shade900,
+                    ? Colors.amberAccent.shade400
+                    : Colors.green.shade900,
                 width: 1.5,
               ),
             ),
@@ -635,15 +783,15 @@ class _MonitorDashboardState extends State<MonitorDashboard>
                   isListening
                       ? 'Listening'
                       : inGrace
-                          ? 'Paused (Grace)'
-                          : 'Not listening',
+                      ? 'Paused (Grace)'
+                      : 'Not listening',
                   style: TextStyle(
                     fontSize: 11,
                     color: isListening
                         ? Colors.greenAccent
                         : inGrace
-                            ? Colors.amberAccent
-                            : Colors.grey.shade500,
+                        ? Colors.amberAccent
+                        : Colors.grey.shade500,
                   ),
                 ),
               ],
@@ -669,57 +817,66 @@ class _MonitorDashboardState extends State<MonitorDashboard>
       sessionStatus = 'Paused (Resuming within ${rem}s)';
       sessionColor = Colors.amberAccent;
     } else {
-      sessionStatus = isBt ? 'Idle (Connected, Not Listening)' : 'Idle (Disconnected)';
+      sessionStatus = isBt
+          ? 'Idle (Connected, Not Listening)'
+          : 'Idle (Disconnected)';
       sessionColor = Colors.grey;
     }
 
-    return _buildSection(
-      'Live Session Tracking (Separated)',
-      [
-        _buildRow(
-          'Bluetooth State',
-          isBt ? 'Connected' : 'Disconnected',
-          valueColor: isBt ? Colors.cyanAccent : Colors.grey,
-        ),
-        _buildRow(
-          'Audio Playback',
-          isAudio ? 'Playing' : 'Not Playing',
-          valueColor: isAudio ? Colors.greenAccent : Colors.grey,
-        ),
-        _buildRow(
-          'Listening Session',
-          sessionStatus,
-          valueColor: sessionColor,
-          valueWeight: FontWeight.bold,
-        ),
-        _buildRow('Connection Duration', _engine.liveConnectedFormatted,
-            valueColor: Colors.cyanAccent.shade100),
-        _buildRow('Listening Duration', _engine.liveActiveListeningFormatted,
-            valueColor: Colors.greenAccent.shade200, valueWeight: FontWeight.bold),
-        _buildRow('Silent / Paused', _engine.liveSilentFormatted),
-        _buildRow('Continuous Total', _engine.liveContinuousFormatted,
-            valueColor: Colors.tealAccent.shade100),
-        _buildRow(
-          'Audio Grace Window',
-          '${_engine.gracePeriod.inMinutes} min (Audio pause only)',
-          valueColor: Colors.amberAccent.shade100,
-        ),
-      ],
-    );
+    return _buildSection('Live Session Tracking (Separated)', [
+      _buildRow(
+        'Bluetooth State',
+        isBt ? 'Connected' : 'Disconnected',
+        valueColor: isBt ? Colors.cyanAccent : Colors.grey,
+      ),
+      _buildRow(
+        'Audio Playback',
+        isAudio ? 'Playing' : 'Not Playing',
+        valueColor: isAudio ? Colors.greenAccent : Colors.grey,
+      ),
+      _buildRow(
+        'Listening Session',
+        sessionStatus,
+        valueColor: sessionColor,
+        valueWeight: FontWeight.bold,
+      ),
+      _buildRow(
+        'Connection Duration',
+        _engine.liveConnectedFormatted,
+        valueColor: Colors.cyanAccent.shade100,
+      ),
+      _buildRow(
+        'Listening Duration',
+        _engine.liveActiveListeningFormatted,
+        valueColor: Colors.greenAccent.shade200,
+        valueWeight: FontWeight.bold,
+      ),
+      _buildRow('Silent / Paused', _engine.liveSilentFormatted),
+      _buildRow(
+        'Continuous Total',
+        _engine.liveContinuousFormatted,
+        valueColor: Colors.tealAccent.shade100,
+      ),
+      _buildRow(
+        'Audio Grace Window',
+        '${_engine.gracePeriod.inMinutes} min (Audio pause only)',
+        valueColor: Colors.amberAccent.shade100,
+      ),
+    ]);
   }
 
   Widget _buildActiveOutputCard() {
     final active = _engine.activeOutputDevice;
-    return _buildSection(
-      'Active Audio Output',
-      [
-        _buildRow('Name', active?.name ?? 'Built-in Phone Speaker'),
-        _buildRow('Type', active?.deviceType ?? 'Built-in Speaker'),
-        _buildRow('Connection', active?.connectionType ?? 'internal'),
-        _buildRow('Audio Playing', _engine.isAudioPlaying ? 'YES' : 'NO',
-            valueColor: _engine.isAudioPlaying ? Colors.greenAccent : Colors.grey),
-      ],
-    );
+    return _buildSection('Active Audio Output', [
+      _buildRow('Name', active?.name ?? 'Built-in Phone Speaker'),
+      _buildRow('Type', active?.deviceType ?? 'Built-in Speaker'),
+      _buildRow('Connection', active?.connectionType ?? 'internal'),
+      _buildRow(
+        'Audio Playing',
+        _engine.isAudioPlaying ? 'YES' : 'NO',
+        valueColor: _engine.isAudioPlaying ? Colors.greenAccent : Colors.grey,
+      ),
+    ]);
   }
 
   Widget _buildConnectedDevicesCard() {
@@ -766,7 +923,9 @@ class _MonitorDashboardState extends State<MonitorDashboard>
                         : Colors.grey.shade900,
                     borderRadius: BorderRadius.circular(6),
                     border: Border.all(
-                      color: isActive ? Colors.tealAccent : Colors.grey.shade800,
+                      color: isActive
+                          ? Colors.tealAccent
+                          : Colors.grey.shade800,
                     ),
                   ),
                   child: Row(
@@ -776,10 +935,12 @@ class _MonitorDashboardState extends State<MonitorDashboard>
                         dev.connectionType == 'bluetooth'
                             ? Icons.bluetooth
                             : dev.connectionType == 'usb'
-                                ? Icons.usb
-                                : Icons.headphones,
+                            ? Icons.usb
+                            : Icons.headphones,
                         size: 18,
-                        color: isActive ? Colors.tealAccent : Colors.grey.shade400,
+                        color: isActive
+                            ? Colors.tealAccent
+                            : Colors.grey.shade400,
                       ),
                       const SizedBox(width: 8),
                       Expanded(
@@ -792,7 +953,9 @@ class _MonitorDashboardState extends State<MonitorDashboard>
                               style: TextStyle(
                                 fontSize: 13,
                                 fontWeight: FontWeight.bold,
-                                color: isActive ? Colors.white : Colors.grey.shade300,
+                                color: isActive
+                                    ? Colors.white
+                                    : Colors.grey.shade300,
                               ),
                             ),
                             const SizedBox(height: 2),
@@ -804,12 +967,25 @@ class _MonitorDashboardState extends State<MonitorDashboard>
                                 color: Colors.grey.shade400,
                               ),
                             ),
+                            if (dev.connectionType == 'bluetooth') ...[
+                              const SizedBox(height: 2),
+                              Text(
+                                'Battery: unavailable from Android',
+                                style: TextStyle(
+                                  fontSize: 10,
+                                  color: Colors.grey.shade500,
+                                ),
+                              ),
+                            ],
                           ],
                         ),
                       ),
                       const SizedBox(width: 6),
                       Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 6,
+                          vertical: 2,
+                        ),
                         decoration: BoxDecoration(
                           color: isActive
                               ? Colors.green.shade800
@@ -838,20 +1014,23 @@ class _MonitorDashboardState extends State<MonitorDashboard>
   Widget _buildTodaySummaryCard() {
     final stats = _engine.todayStats;
 
-    return _buildSection(
-      'Today Summary',
-      [
-        _buildRow('Total Connected', stats.totalConnectedFormatted),
-        _buildRow('Active Listening', stats.totalActiveListeningFormatted,
-            valueColor: Colors.greenAccent),
-        _buildRow('Silent / Paused', stats.totalSilentFormatted),
-        _buildRow('Device Sessions', '${stats.deviceSessionCount}'),
-        _buildRow('Continuous Sessions', '${stats.continuousSessionCount}'),
-        _buildRow('Devices Used', '${stats.devicesUsedCount}'),
-        _buildRow('Longest Session', stats.longestContinuousFormatted,
-            valueColor: Colors.tealAccent.shade100),
-      ],
-    );
+    return _buildSection('Today Summary', [
+      _buildRow('Total Connected', stats.totalConnectedFormatted),
+      _buildRow(
+        'Active Listening',
+        stats.totalActiveListeningFormatted,
+        valueColor: Colors.greenAccent,
+      ),
+      _buildRow('Silent / Paused', stats.totalSilentFormatted),
+      _buildRow('Device Sessions', '${stats.deviceSessionCount}'),
+      _buildRow('Continuous Sessions', '${stats.continuousSessionCount}'),
+      _buildRow('Devices Used', '${stats.devicesUsedCount}'),
+      _buildRow(
+        'Longest Session',
+        stats.longestContinuousFormatted,
+        valueColor: Colors.tealAccent.shade100,
+      ),
+    ]);
   }
 
   Widget _buildRecentSessionsCard() {
@@ -880,10 +1059,7 @@ class _MonitorDashboardState extends State<MonitorDashboard>
                 ),
                 Text(
                   '${sessions.length} saved',
-                  style: TextStyle(
-                    fontSize: 11,
-                    color: Colors.grey.shade400,
-                  ),
+                  style: TextStyle(fontSize: 11, color: Colors.grey.shade400),
                 ),
               ],
             ),
@@ -941,8 +1117,11 @@ class _MonitorDashboardState extends State<MonitorDashboard>
                       const SizedBox(height: 6),
                       // Durations breakdown
                       _buildMiniRow('Connected', s.connectedDurationFormatted),
-                      _buildMiniRow('Listening', s.activeListeningDurationFormatted,
-                          color: Colors.greenAccent),
+                      _buildMiniRow(
+                        'Listening',
+                        s.activeListeningDurationFormatted,
+                        color: Colors.greenAccent,
+                      ),
                       _buildMiniRow('Silent', s.silentDurationFormatted),
                     ],
                   ),
@@ -1032,10 +1211,7 @@ class _MonitorDashboardState extends State<MonitorDashboard>
                 Text(
                   label,
                   softWrap: true,
-                  style: TextStyle(
-                    color: Colors.grey.shade400,
-                    fontSize: 13,
-                  ),
+                  style: TextStyle(color: Colors.grey.shade400, fontSize: 13),
                 ),
                 const SizedBox(height: 2),
                 Text(
@@ -1059,10 +1235,7 @@ class _MonitorDashboardState extends State<MonitorDashboard>
                 child: Text(
                   label,
                   softWrap: true,
-                  style: TextStyle(
-                    color: Colors.grey.shade400,
-                    fontSize: 13,
-                  ),
+                  style: TextStyle(color: Colors.grey.shade400, fontSize: 13),
                 ),
               ),
               const SizedBox(width: 8),
@@ -1108,18 +1281,58 @@ class _MonitorDashboardState extends State<MonitorDashboard>
                     letterSpacing: 0.8,
                   ),
                 ),
-                Row(
-                  mainAxisSize: MainAxisSize.min,
+                Wrap(
+                  spacing: 4,
+                  runSpacing: 4,
                   children: [
+                    TextButton.icon(
+                      style: TextButton.styleFrom(
+                        visualDensity: VisualDensity.compact,
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 6,
+                          vertical: 2,
+                        ),
+                        minimumSize: Size.zero,
+                        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                      ),
+                      icon: const Icon(
+                        Icons.list_alt,
+                        size: 14,
+                        color: Colors.tealAccent,
+                      ),
+                      label: const Text(
+                        'View All',
+                        style: TextStyle(
+                          fontSize: 11,
+                          color: Colors.tealAccent,
+                        ),
+                      ),
+                      onPressed: () {
+                        Navigator.push(
+                          context,
+                          MaterialPageRoute(
+                            builder: (_) => DiagnosticLogViewer(
+                              database: _database,
+                              audioService: _audioService,
+                            ),
+                          ),
+                        );
+                      },
+                    ),
                     TextButton(
                       style: TextButton.styleFrom(
                         visualDensity: VisualDensity.compact,
-                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 6,
+                          vertical: 2,
+                        ),
                         minimumSize: Size.zero,
                         tapTargetSize: MaterialTapTargetSize.shrinkWrap,
                       ),
                       onPressed: () {
-                        Clipboard.setData(ClipboardData(text: _eventLog.join('\n')));
+                        Clipboard.setData(
+                          ClipboardData(text: _eventLog.join('\n')),
+                        );
                         ScaffoldMessenger.of(context).showSnackBar(
                           const SnackBar(
                             content: Text('Log copied to clipboard'),
@@ -1127,13 +1340,15 @@ class _MonitorDashboardState extends State<MonitorDashboard>
                           ),
                         );
                       },
-                      child: const Text('Copy', style: TextStyle(fontSize: 12)),
+                      child: const Text('Copy', style: TextStyle(fontSize: 11)),
                     ),
-                    const SizedBox(width: 6),
                     TextButton(
                       style: TextButton.styleFrom(
                         visualDensity: VisualDensity.compact,
-                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 6,
+                          vertical: 2,
+                        ),
                         minimumSize: Size.zero,
                         tapTargetSize: MaterialTapTargetSize.shrinkWrap,
                       ),
@@ -1142,7 +1357,10 @@ class _MonitorDashboardState extends State<MonitorDashboard>
                           _eventLog.clear();
                         });
                       },
-                      child: const Text('Clear', style: TextStyle(fontSize: 12)),
+                      child: const Text(
+                        'Clear',
+                        style: TextStyle(fontSize: 11),
+                      ),
                     ),
                   ],
                 ),

@@ -12,124 +12,231 @@ class PlaybackStateResolverTest {
 
     @Before
     fun setUp() {
-        resolver = PlaybackStateResolver()
+        resolver = PlaybackStateResolver(confirmationWindowMs = 2000L)
     }
 
     /**
-     * Test 1: Continuous playback with temporary configuration loss.
-     * Expected: No AUDIO_STOPPED (PlaybackTransition.NONE) when Bluetooth A2DP or isMusicActive is true.
+     * Requirement 1: AUDIO_STARTED remains immediate (0ms latency).
      */
     @Test
-    fun test1_continuousPlaybackTemporaryConfigLoss_emitsNone() {
+    fun test_audioStartedRemainsImmediate() {
+        resolver.reset(initialPlaying = false)
+        assertFalse(resolver.isCurrentlyPlaying)
+
+        val transition = resolver.resolve(
+            hasMediaConfig = true,
+            isMusicActive = false,
+            isA2dpStreaming = false,
+            currentTimeMs = 1000L
+        )
+
+        assertEquals(PlaybackTransition.STARTED, transition)
+        assertTrue(resolver.isCurrentlyPlaying)
+        assertFalse(resolver.isStopPending)
+    }
+
+    /**
+     * Requirement 2: Transient signal loss (<2s) schedules confirmation window and does NOT emit STOPPED.
+     */
+    @Test
+    fun test_transientSignalLoss_schedulesWindow_emitsNone() {
         resolver.reset(initialPlaying = true)
         assertTrue(resolver.isCurrentlyPlaying)
 
-        // Config lost, but Bluetooth A2DP is streaming
-        val transitionA = resolver.resolve(hasMediaConfig = false, isMusicActive = false, isA2dpStreaming = true)
-        assertEquals(PlaybackTransition.NONE, transitionA)
-        assertTrue(resolver.isCurrentlyPlaying)
+        // All signals become false at t=1000ms
+        val transitionA = resolver.resolve(
+            hasMediaConfig = false,
+            isMusicActive = false,
+            isA2dpStreaming = false,
+            currentTimeMs = 1000L
+        )
 
-        // Config lost, but isMusicActive is true
-        val transitionB = resolver.resolve(hasMediaConfig = false, isMusicActive = true, isA2dpStreaming = false)
+        assertEquals(PlaybackTransition.NONE, transitionA)
+        assertTrue(resolver.isCurrentlyPlaying) // Still considered playing
+        assertTrue(resolver.isStopPending)
+        assertEquals(1000L, resolver.stopPendingSinceMs)
+
+        // Another evaluation within the 2-second window at t=1800ms (800ms elapsed < 2000ms)
+        val transitionB = resolver.resolve(
+            hasMediaConfig = false,
+            isMusicActive = false,
+            isA2dpStreaming = false,
+            currentTimeMs = 1800L
+        )
+
         assertEquals(PlaybackTransition.NONE, transitionB)
         assertTrue(resolver.isCurrentlyPlaying)
+        assertTrue(resolver.isStopPending)
     }
 
     /**
-     * Test 2: playerState transitions (STARTED vs PAUSED).
+     * Requirement 3: Playback recovery before the deadline cancels pending stop and keeps session active.
      */
     @Test
-    fun test2_playerStateTransitions_correctTransitions() {
-        resolver.reset(initialPlaying = false)
-
-        // STARTED player state
-        val startTransition = resolver.resolve(hasMediaConfig = true, isMusicActive = false)
-        assertEquals(PlaybackTransition.STARTED, startTransition)
-        assertTrue(resolver.isCurrentlyPlaying)
-
-        // PAUSED player state and no music/A2DP active
-        val pauseTransition = resolver.resolve(hasMediaConfig = false, isMusicActive = false, isA2dpStreaming = false)
-        assertEquals(PlaybackTransition.STOPPED, pauseTransition)
-        assertFalse(resolver.isCurrentlyPlaying)
-    }
-
-    /**
-     * Test 3: isMusicActive transitions.
-     */
-    @Test
-    fun test3_isMusicActiveTransitions_triggersStartAndSustains() {
-        resolver.reset(initialPlaying = false)
-
-        val start = resolver.resolve(hasMediaConfig = false, isMusicActive = true)
-        assertEquals(PlaybackTransition.STARTED, start)
-        assertTrue(resolver.isCurrentlyPlaying)
-
-        val sustain = resolver.resolve(hasMediaConfig = true, isMusicActive = false)
-        assertEquals(PlaybackTransition.NONE, sustain)
-        assertTrue(resolver.isCurrentlyPlaying)
-    }
-
-    /**
-     * Test 4: Multiple playback configurations.
-     */
-    @Test
-    fun test4_multipleConfigsOneDisappears_emitsNone() {
+    fun test_playbackRecoveryBeforeDeadline_cancelsPendingStop_keepsSessionActive() {
         resolver.reset(initialPlaying = true)
 
-        val transition = resolver.resolve(hasMediaConfig = true, isMusicActive = true, isA2dpStreaming = true)
-        assertEquals(PlaybackTransition.NONE, transition)
+        // Signal drops to false at t=1000ms
+        val transitionA = resolver.resolve(
+            hasMediaConfig = false,
+            isMusicActive = false,
+            isA2dpStreaming = false,
+            currentTimeMs = 1000L
+        )
+        assertEquals(PlaybackTransition.NONE, transitionA)
+        assertTrue(resolver.isStopPending)
+
+        // Track starts again at t=1800ms (< 2000ms window)
+        val recoveryTransition = resolver.resolve(
+            hasMediaConfig = true,
+            isMusicActive = false,
+            isA2dpStreaming = false,
+            currentTimeMs = 1800L
+        )
+
+        // Emits NONE (session remains active without gap or duplicate start)
+        assertEquals(PlaybackTransition.NONE, recoveryTransition)
         assertTrue(resolver.isCurrentlyPlaying)
+        assertFalse(resolver.isStopPending)
+        assertEquals(null, resolver.stopPendingSinceMs)
     }
 
     /**
-     * Test 5: Genuine pause.
+     * Requirement 4: Genuine pause: all signals remain false for full window (>=2000ms) -> emits STOPPED exactly once.
      */
     @Test
-    fun test5_genuinePause_emitsStoppedOnce() {
+    fun test_genuinePause_emitsStoppedExactlyOnceAfterFullWindow() {
         resolver.reset(initialPlaying = true)
 
-        val transition = resolver.resolve(hasMediaConfig = false, isMusicActive = false, isA2dpStreaming = false)
-        assertEquals(PlaybackTransition.STOPPED, transition)
-        assertFalse(resolver.isCurrentlyPlaying)
-        assertEquals("no_active_media_or_sound", resolver.getResolutionReason(false, false, false))
+        // Signals become false at t=1000ms
+        val drop = resolver.resolve(false, false, false, currentTimeMs = 1000L)
+        assertEquals(PlaybackTransition.NONE, drop)
+        assertTrue(resolver.isStopPending)
 
-        val repeat = resolver.resolve(hasMediaConfig = false, isMusicActive = false, isA2dpStreaming = false)
+        // Window expired at t=3000ms (2000ms elapsed)
+        val stopTransition = resolver.resolve(false, false, false, currentTimeMs = 3000L)
+        assertEquals(PlaybackTransition.STOPPED, stopTransition)
+        assertFalse(resolver.isCurrentlyPlaying)
+        assertFalse(resolver.isStopPending)
+
+        // Subsequent evaluations while inactive emit NONE (no duplicate stop)
+        val repeat = resolver.resolve(false, false, false, currentTimeMs = 3500L)
         assertEquals(PlaybackTransition.NONE, repeat)
         assertFalse(resolver.isCurrentlyPlaying)
     }
 
     /**
-     * Test 6: Genuine resume.
+     * Requirement 4 & Handler timer: confirmPendingStop emits STOPPED exactly once.
      */
     @Test
-    fun test6_genuineResume_emitsStartedOnce() {
-        resolver.reset(initialPlaying = false)
+    fun test_confirmPendingStop_emitsStoppedOnce() {
+        resolver.reset(initialPlaying = true)
 
-        val transition = resolver.resolve(hasMediaConfig = true, isMusicActive = true, isA2dpStreaming = true)
-        assertEquals(PlaybackTransition.STARTED, transition)
+        // Schedule pending stop
+        resolver.resolve(false, false, false, currentTimeMs = 1000L)
+        assertTrue(resolver.isStopPending)
         assertTrue(resolver.isCurrentlyPlaying)
-        assertEquals("active_media_configuration", resolver.getResolutionReason(true, true, true))
+
+        // Timer fires
+        val confirmed = resolver.confirmPendingStop()
+        assertEquals(PlaybackTransition.STOPPED, confirmed)
+        assertFalse(resolver.isCurrentlyPlaying)
+        assertFalse(resolver.isStopPending)
+
+        // Second invocation (e.g. race condition) emits NONE
+        val duplicate = resolver.confirmPendingStop()
+        assertEquals(PlaybackTransition.NONE, duplicate)
     }
 
     /**
-     * Test 7: No duplicate start/stop events across repeated identical states.
+     * Requirement 5: Bluetooth disconnection during pending window cancels verification immediately.
      */
     @Test
-    fun test7_repeatedIdenticalStates_noDuplicates() {
+    fun test_bluetoothDisconnectionDuringPendingWindow_cancelsImmediately() {
+        resolver.reset(initialPlaying = true)
+
+        // Audio signals drop at t=1000ms -> pending stop
+        resolver.resolve(false, false, false, currentTimeMs = 1000L)
+        assertTrue(resolver.isStopPending)
+
+        // Disconnection event occurs at t=1400ms -> cancelPendingStop and reset
+        resolver.cancelPendingStop()
+        assertFalse(resolver.isStopPending)
+        resolver.reset(initialPlaying = false)
+        assertFalse(resolver.isCurrentlyPlaying)
+
+        // Stale timer firing at t=3000ms produces no event
+        assertEquals(PlaybackTransition.NONE, resolver.confirmPendingStop())
+    }
+
+    /**
+     * Requirement 6: Duplicate callbacks during pending window do NOT postpone or duplicate the timer.
+     */
+    @Test
+    fun test_duplicateCallbacksDuringWindow_preserveOriginalDeadline() {
+        resolver.reset(initialPlaying = true)
+
+        // First false event at t=1000ms
+        resolver.resolve(false, false, false, currentTimeMs = 1000L)
+        assertEquals(1000L, resolver.stopPendingSinceMs)
+
+        // Duplicate events at t=1200ms, t=1400ms, t=1600ms
+        for (time in listOf(1200L, 1400L, 1600L, 1800L)) {
+            val trans = resolver.resolve(false, false, false, currentTimeMs = time)
+            assertEquals(PlaybackTransition.NONE, trans)
+            assertEquals(1000L, resolver.stopPendingSinceMs) // Deadline anchor preserved!
+            assertTrue(resolver.isCurrentlyPlaying)
+        }
+
+        // At t=3000ms (2000ms from t=1000ms), deadline is reached
+        val finalTransition = resolver.resolve(false, false, false, currentTimeMs = 3000L)
+        assertEquals(PlaybackTransition.STOPPED, finalTransition)
+        assertFalse(resolver.isCurrentlyPlaying)
+    }
+
+    /**
+     * Requirement 7: Connected-but-idle never counts as active playback.
+     */
+    @Test
+    fun test_connectedButIdle_neverCountsAsActivePlayback() {
         resolver.reset(initialPlaying = false)
 
-        val start = resolver.resolve(hasMediaConfig = true, isMusicActive = true)
-        assertEquals(PlaybackTransition.STARTED, start)
-
-        for (i in 1..5) {
-            assertEquals(PlaybackTransition.NONE, resolver.resolve(hasMediaConfig = true, isMusicActive = true))
+        for (time in listOf(1000L, 2000L, 3000L)) {
+            val transition = resolver.resolve(false, false, false, currentTimeMs = time)
+            assertEquals(PlaybackTransition.NONE, transition)
+            assertFalse(resolver.isCurrentlyPlaying)
+            assertFalse(resolver.isStopPending)
         }
+    }
 
-        val stop = resolver.resolve(hasMediaConfig = false, isMusicActive = false)
-        assertEquals(PlaybackTransition.STOPPED, stop)
+    /**
+     * Continuous playback with A2DP streaming or isMusicActive (multi-signal preservation).
+     */
+    @Test
+    fun test_continuousPlaybackMultiSignals_emitsNone() {
+        resolver.reset(initialPlaying = true)
 
-        for (i in 1..5) {
-            assertEquals(PlaybackTransition.NONE, resolver.resolve(hasMediaConfig = false, isMusicActive = false))
-        }
+        // Config lost, but Bluetooth A2DP is streaming
+        val transitionA = resolver.resolve(hasMediaConfig = false, isMusicActive = false, isA2dpStreaming = true)
+        assertEquals(PlaybackTransition.NONE, transitionA)
+        assertTrue(resolver.isCurrentlyPlaying)
+        assertFalse(resolver.isStopPending)
+
+        // Config lost, but isMusicActive is true
+        val transitionB = resolver.resolve(hasMediaConfig = false, isMusicActive = true, isA2dpStreaming = false)
+        assertEquals(PlaybackTransition.NONE, transitionB)
+        assertTrue(resolver.isCurrentlyPlaying)
+        assertFalse(resolver.isStopPending)
+    }
+
+    /**
+     * Resolution reason string checks.
+     */
+    @Test
+    fun test_resolutionReasons() {
+        assertEquals("active_media_configuration", resolver.getResolutionReason(true, true, true))
+        assertEquals("bluetooth_a2dp_streaming", resolver.getResolutionReason(false, false, true))
+        assertEquals("audio_manager_music_active", resolver.getResolutionReason(false, true, false))
+        assertEquals("no_active_media_or_sound", resolver.getResolutionReason(false, false, false))
     }
 }

@@ -3,6 +3,7 @@ import '../models/connection_record.dart';
 import '../models/continuous_session.dart';
 import '../models/daily_stats.dart';
 import '../models/device_usage_stats.dart';
+import '../models/diagnostic_event.dart';
 import '../models/listening_session.dart';
 import '../models/period_stats.dart';
 
@@ -36,6 +37,24 @@ abstract class DatabaseAdapter {
   Future<PeriodStats> getPeriodStats(DateTime start, DateTime end);
   Future<List<DeviceUsageStats>> getDeviceUsageStats(DateTime start, DateTime end);
   Future<List<DateTime>> getDatesWithActivity();
+
+  // Phase 5: Persistent Diagnostic Event Logging
+  Future<void> saveDiagnosticEvent(DiagnosticEvent event);
+  Future<void> saveDiagnosticEvents(List<DiagnosticEvent> events);
+  Future<List<DiagnosticEvent>> getDiagnosticEvents({
+    int limit = 100,
+    int offset = 0,
+    String? eventType,
+    int? startTimeMs,
+    int? endTimeMs,
+  });
+  Future<int> getDiagnosticEventCount({
+    String? eventType,
+    int? startTimeMs,
+    int? endTimeMs,
+  });
+  Future<int> pruneDiagnosticEvents({int keepLatest = 10000});
+  Future<void> clearDiagnosticEvents();
 }
 
 /// In-memory implementation of [DatabaseAdapter] for unit tests.
@@ -44,6 +63,7 @@ class InMemoryDatabaseAdapter implements DatabaseAdapter {
   final List<ListeningSession> deviceSessions = [];
   final List<ContinuousListeningSession> continuousSessions = [];
   final List<ConnectionRecord> connectionRecords = [];
+  final List<DiagnosticEvent> diagnosticEvents = [];
 
   @override
   Future<void> upsertDevice(AudioDevice device) async {
@@ -358,6 +378,74 @@ class InMemoryDatabaseAdapter implements DatabaseAdapter {
     }
     final list = dates.toList()..sort((a, b) => b.compareTo(a));
     return list;
+  }
+
+  // =========================================================================
+  // Diagnostic Events (Phase 5)
+  // =========================================================================
+
+  @override
+  Future<void> saveDiagnosticEvent(DiagnosticEvent event) async {
+    diagnosticEvents.removeWhere((e) => e.id == event.id);
+    diagnosticEvents.add(event);
+  }
+
+  @override
+  Future<void> saveDiagnosticEvents(List<DiagnosticEvent> events) async {
+    for (final e in events) {
+      await saveDiagnosticEvent(e);
+    }
+  }
+
+  @override
+  Future<List<DiagnosticEvent>> getDiagnosticEvents({
+    int limit = 100,
+    int offset = 0,
+    String? eventType,
+    int? startTimeMs,
+    int? endTimeMs,
+  }) async {
+    var filtered = diagnosticEvents.where((e) {
+      if (eventType != null && e.eventType != eventType) return false;
+      if (startTimeMs != null && e.timestamp < startTimeMs) return false;
+      if (endTimeMs != null && e.timestamp > endTimeMs) return false;
+      return true;
+    }).toList();
+    filtered.sort((a, b) {
+      final cmp = b.timestamp.compareTo(a.timestamp);
+      if (cmp != 0) return cmp;
+      return b.id.compareTo(a.id);
+    });
+    if (offset >= filtered.length) return [];
+    return filtered.skip(offset).take(limit).toList();
+  }
+
+  @override
+  Future<int> getDiagnosticEventCount({
+    String? eventType,
+    int? startTimeMs,
+    int? endTimeMs,
+  }) async {
+    return diagnosticEvents.where((e) {
+      if (eventType != null && e.eventType != eventType) return false;
+      if (startTimeMs != null && e.timestamp < startTimeMs) return false;
+      if (endTimeMs != null && e.timestamp > endTimeMs) return false;
+      return true;
+    }).length;
+  }
+
+  @override
+  Future<int> pruneDiagnosticEvents({int keepLatest = 10000}) async {
+    if (diagnosticEvents.length <= keepLatest) return 0;
+    diagnosticEvents.sort((a, b) => b.timestamp.compareTo(a.timestamp));
+    final removed = diagnosticEvents.length - keepLatest;
+    diagnosticEvents.removeRange(keepLatest, diagnosticEvents.length);
+    return removed;
+  }
+
+  @override
+  Future<void> clearDiagnosticEvents() async {
+    diagnosticEvents.clear();
   }
 }
 

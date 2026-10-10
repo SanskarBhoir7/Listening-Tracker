@@ -39,6 +39,7 @@ class AudioMonitorEngine(private val context: Context) {
 
     companion object {
         private const val TAG = "AudioMonitorEngine"
+        private const val STOP_CONFIRMATION_WINDOW_MS = 2000L
     }
 
     private val audioManager: AudioManager =
@@ -58,6 +59,10 @@ class AudioMonitorEngine(private val context: Context) {
     // State resolver reconciling AudioPlaybackConfiguration + AudioManager.isMusicActive() + BluetoothA2dp
     private val playbackResolver = PlaybackStateResolver()
 
+    // Cancellable 2-second stop verification window
+    private var pendingStopRunnable: Runnable? = null
+    private var pendingStopToken: Long = 0L
+
     private var lastOutputDeviceType: Int = AudioDeviceInfo.TYPE_BUILTIN_SPEAKER
     private var lastOutputDeviceName: String = "Phone Speaker"
 
@@ -66,8 +71,6 @@ class AudioMonitorEngine(private val context: Context) {
 
     // Bluetooth A2DP profile proxy to check hardware streaming state on Bluetooth earbuds
     private var bluetoothA2dp: BluetoothA2dp? = null
-    private var a2dpReceiverRegistered = false
-
     private val bluetoothProfileListener = object : BluetoothProfile.ServiceListener {
         override fun onServiceConnected(profile: Int, proxy: BluetoothProfile) {
             if (profile == BluetoothProfile.A2DP) {
@@ -93,6 +96,20 @@ class AudioMonitorEngine(private val context: Context) {
             }
         }
     }
+
+    private val monitoringCallbacks = MonitoringCallbacks(
+        registerPlayback = { audioManager.registerAudioPlaybackCallback(audioPlaybackCallback, mainHandler) },
+        unregisterPlayback = { audioManager.unregisterAudioPlaybackCallback(audioPlaybackCallback) },
+        registerA2dp = {
+            val filter = IntentFilter(BluetoothA2dp.ACTION_PLAYING_STATE_CHANGED)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                context.registerReceiver(a2dpPlayingReceiver, filter, Context.RECEIVER_NOT_EXPORTED)
+            } else {
+                context.registerReceiver(a2dpPlayingReceiver, filter)
+            }
+        },
+        unregisterA2dp = { context.unregisterReceiver(a2dpPlayingReceiver) },
+    )
 
     // =========================================================================
     // Audio Device Callback — tracks device connections/disconnections
@@ -124,11 +141,12 @@ class AudioMonitorEngine(private val context: Context) {
                 // Bluetooth device connected -> start monitoring automatically if not already active
                 if (!isMonitoring) {
                     Log.d(TAG, "Bluetooth audio device connected -> starting monitoring automatically")
-                    startMonitoring()
                     onMonitoringLifecycleRequested?.invoke(true)
                 }
-                checkAudioOutputChange()
-                processPlaybackConfigs(audioManager.activePlaybackConfigurations)
+                if (isMonitoring) {
+                    checkAudioOutputChange()
+                    processPlaybackConfigs(audioManager.activePlaybackConfigurations)
+                }
             }
         }
 
@@ -142,6 +160,7 @@ class AudioMonitorEngine(private val context: Context) {
 
                 if (snapshot != null) {
                     bluetoothDeviceRemoved = true
+                    cancelPendingStopVerification("trackable device disconnected: ${snapshot.name}")
                     Log.d(TAG, "Trackable device disconnected: ${snapshot.name} (${snapshot.typeName})")
                     eventListener?.onEvent(AudioEvent(
                         type = AudioEventType.DEVICE_DISCONNECTED,
@@ -179,7 +198,16 @@ class AudioMonitorEngine(private val context: Context) {
 
     init {
         // Always listen for audio device connections/disconnections
-        audioManager.registerAudioDeviceCallback(audioDeviceCallback, mainHandler)
+        try {
+            audioManager.registerAudioDeviceCallback(audioDeviceCallback, mainHandler)
+            NativeLifecycleDiagnostics.record(context, "NATIVE_DEVICE_CALLBACK_REGISTERED")
+        } catch (error: Exception) {
+            NativeLifecycleDiagnostics.record(context, "NATIVE_DEVICE_CALLBACK_REGISTRATION_FAILED", mapOf(
+                "error" to error.javaClass.name,
+                "message" to (error.message ?: ""),
+            ))
+            throw error
+        }
     }
 
     /**
@@ -196,6 +224,7 @@ class AudioMonitorEngine(private val context: Context) {
      * Disposes the engine and releases all system callbacks and profile proxies.
      */
     fun dispose() {
+        cancelPendingStopVerification("dispose")
         stopMonitoring()
         try {
             audioManager.unregisterAudioDeviceCallback(audioDeviceCallback)
@@ -251,10 +280,95 @@ class AudioMonitorEngine(private val context: Context) {
         // If a Bluetooth trackable device is ALREADY connected at launch:
         if (connectedAudioDevices.isNotEmpty()) {
             Log.d(TAG, "Found ${connectedAudioDevices.size} connected Bluetooth devices at launch -> starting monitoring")
-            startMonitoring()
             onMonitoringLifecycleRequested?.invoke(true)
         } else {
             Log.d(TAG, "No Bluetooth devices connected at launch -> monitoring remains OFF")
+        }
+    }
+
+    /**
+     * Handles external Bluetooth connection event dispatched by persistent system-managed observer
+     * (BluetoothConnectionReceiver or CompanionDeviceService).
+     */
+    fun handleDeviceConnected(name: String, address: String) {
+        val alreadyTracked = connectedAudioDevices.values.any {
+            (address.isNotBlank() && it.address.equals(address, ignoreCase = true)) ||
+            (name.isNotBlank() && it.name.equals(name, ignoreCase = true))
+        }
+
+        if (!alreadyTracked) {
+            val outputDevices = audioManager.getDevices(AudioManager.GET_DEVICES_OUTPUTS)
+            val matchedDevice = outputDevices.find {
+                isTrackableDevice(it) && (
+                    (address.isNotBlank() && Build.VERSION.SDK_INT >= Build.VERSION_CODES.P && it.address.equals(address, ignoreCase = true)) ||
+                    it.productName?.toString()?.equals(name, ignoreCase = true) == true
+                )
+            }
+            val snapshot = if (matchedDevice != null) {
+                AudioDeviceSnapshot.from(matchedDevice)
+            } else {
+                AudioDeviceSnapshot(
+                    id = (if (address.isNotBlank()) address.hashCode() else name.hashCode()).let { if (it == 0) 1001 else it },
+                    name = name.ifBlank { "Bluetooth Audio Device" },
+                    typeName = "Bluetooth A2DP",
+                    connectionType = "bluetooth",
+                    type = AudioDeviceInfo.TYPE_BLUETOOTH_A2DP,
+                    address = address
+                )
+            }
+            connectedAudioDevices[snapshot.id] = snapshot
+            Log.d(TAG, "Device registered from system observer: ${snapshot.name} (${snapshot.id})")
+            eventListener?.onEvent(AudioEvent(
+                type = AudioEventType.DEVICE_CONNECTED,
+                deviceId = snapshot.id,
+                deviceAddress = snapshot.address,
+                deviceName = snapshot.name,
+                deviceType = snapshot.typeName,
+                connectionType = snapshot.connectionType,
+                timestamp = System.currentTimeMillis()
+            ))
+        }
+
+        if (!isMonitoring) {
+            Log.d(TAG, "Audio device active -> starting monitoring automatically")
+            onMonitoringLifecycleRequested?.invoke(true)
+        }
+        if (isMonitoring) {
+            checkAudioOutputChange()
+            processPlaybackConfigs(audioManager.activePlaybackConfigurations)
+        }
+    }
+
+    /**
+     * Handles external Bluetooth disconnection event dispatched by persistent system-managed observer.
+     */
+    fun handleDeviceDisconnected(name: String, address: String) {
+        val toRemove = connectedAudioDevices.values.find {
+            (address.isNotBlank() && it.address.equals(address, ignoreCase = true)) ||
+            (name.isNotBlank() && it.name.equals(name, ignoreCase = true))
+        }
+
+        if (toRemove != null) {
+            cancelPendingStopVerification("device disconnected via system observer: ${toRemove.name}")
+            connectedAudioDevices.remove(toRemove.id)
+            Log.d(TAG, "Device unregistered from system observer: ${toRemove.name} (${toRemove.id})")
+            eventListener?.onEvent(AudioEvent(
+                type = AudioEventType.DEVICE_DISCONNECTED,
+                deviceId = toRemove.id,
+                deviceAddress = toRemove.address,
+                deviceName = toRemove.name,
+                deviceType = toRemove.typeName,
+                connectionType = toRemove.connectionType,
+                timestamp = System.currentTimeMillis()
+            ))
+        }
+
+        checkAudioOutputChange()
+
+        if (connectedAudioDevices.isEmpty() && isMonitoring) {
+            Log.d(TAG, "All audio devices disconnected -> stopping monitoring automatically")
+            stopMonitoring()
+            onMonitoringLifecycleRequested?.invoke(false)
         }
     }
 
@@ -265,31 +379,28 @@ class AudioMonitorEngine(private val context: Context) {
     fun startMonitoring() {
         if (isMonitoring) {
             Log.d(TAG, "Audio monitoring already running; ignoring duplicate start")
+            NativeLifecycleDiagnostics.record(context, "NATIVE_MONITORING_DUPLICATE_START_IGNORED")
             return
         }
-        isMonitoring = true
-        Log.d(TAG, "Starting audio playback monitoring")
+        NativeLifecycleDiagnostics.record(context, "NATIVE_MONITORING_START_REQUESTED")
+        try {
+            monitoringCallbacks.start()
 
-        // Register for audio playback state changes
-        audioManager.registerAudioPlaybackCallback(audioPlaybackCallback, mainHandler)
-
-        // Register for Bluetooth A2DP playing state broadcasts
-        if (!a2dpReceiverRegistered) {
-            try {
-                val filter = IntentFilter(BluetoothA2dp.ACTION_PLAYING_STATE_CHANGED)
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                    context.registerReceiver(a2dpPlayingReceiver, filter, Context.RECEIVER_NOT_EXPORTED)
-                } else {
-                    context.registerReceiver(a2dpPlayingReceiver, filter)
-                }
-                a2dpReceiverRegistered = true
-            } catch (e: Exception) {
-                Log.w(TAG, "Failed to register a2dpPlayingReceiver", e)
-            }
+            isMonitoring = true
+            snapshotCurrentState()
+            NativeLifecycleDiagnostics.record(context, "NATIVE_MONITORING_ACTIVE", mapOf(
+                "playbackCallbackRegistered" to monitoringCallbacks.playbackRegistered,
+                "a2dpReceiverRegistered" to monitoringCallbacks.a2dpRegistered,
+            ))
+        } catch (error: Exception) {
+            Log.e(TAG, "Native monitoring callback registration failed", error)
+            monitoringCallbacks.stop()
+            isMonitoring = false
+            NativeLifecycleDiagnostics.record(context, "NATIVE_MONITORING_START_FAILED", mapOf(
+                "error" to error.javaClass.name,
+                "message" to (error.message ?: ""),
+            ))
         }
-
-        // Snapshot current state
-        snapshotCurrentState()
     }
 
     fun stopMonitoring() {
@@ -300,22 +411,12 @@ class AudioMonitorEngine(private val context: Context) {
         isMonitoring = false
         Log.d(TAG, "Stopping audio playback monitoring")
 
-        try {
-            audioManager.unregisterAudioPlaybackCallback(audioPlaybackCallback)
-        } catch (e: Exception) {
-            Log.w(TAG, "Failed to unregister audioPlaybackCallback", e)
-        }
+        cancelPendingStopVerification("stopping monitoring")
 
-        if (a2dpReceiverRegistered) {
-            try {
-                context.unregisterReceiver(a2dpPlayingReceiver)
-            } catch (e: Exception) {
-                Log.w(TAG, "Failed to unregister a2dpPlayingReceiver", e)
-            }
-            a2dpReceiverRegistered = false
-        }
+        monitoringCallbacks.stop()
 
         playbackResolver.reset(false)
+        NativeLifecycleDiagnostics.record(context, "NATIVE_MONITORING_STOPPED")
     }
 
     /**
@@ -326,7 +427,7 @@ class AudioMonitorEngine(private val context: Context) {
         val hasMedia = hasMediaPlayback(configs)
         val isMusicActive = queryIsMusicActive()
         val isA2dpStreaming = queryIsA2dpPlaying()
-        val isPlaying = hasMedia || isMusicActive || isA2dpStreaming
+        val isPlaying = hasMedia || isMusicActive || isA2dpStreaming || playbackResolver.isCurrentlyPlaying
         val outputDevice = getCurrentOutputDevice()
         val outputAddress = if (outputDevice != null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
             try { outputDevice.address ?: "" } catch (e: Exception) { "" }
@@ -482,6 +583,113 @@ class AudioMonitorEngine(private val context: Context) {
         }
     }
 
+    private fun cancelPendingStopVerification(reason: String) {
+        if (pendingStopRunnable != null || playbackResolver.isStopPending) {
+            Log.d(TAG, "Cancelling pending stop verification ($reason)")
+            pendingStopRunnable?.let {
+                mainHandler.removeCallbacks(it)
+                pendingStopRunnable = null
+            }
+            pendingStopToken++
+            playbackResolver.cancelPendingStop()
+
+            val currentOutput = getCurrentOutputDevice()
+            val currentType = currentOutput?.type ?: lastOutputDeviceType
+            val currentName = currentOutput?.productName?.toString() ?: lastOutputDeviceName
+
+            eventListener?.onEvent(AudioEvent(
+                type = AudioEventType.STOP_CONFIRMATION_CANCELLED,
+                timestamp = System.currentTimeMillis(),
+                isAudioPlaying = playbackResolver.isCurrentlyPlaying,
+                deviceId = currentOutput?.id,
+                deviceName = currentName,
+                deviceType = getDeviceTypeName(currentType),
+                connectionType = getConnectionType(currentType),
+                diagnostics = "reason=$reason",
+                stopConfirmationStatus = "cancelled"
+            ))
+        }
+    }
+
+    private fun handleStopVerificationDeadline(token: Long) {
+        if (token != pendingStopToken) {
+            Log.d(TAG, "Ignoring stale stop verification token=$token (current=$pendingStopToken)")
+            return
+        }
+        pendingStopRunnable = null
+
+        if (!isMonitoring) {
+            Log.d(TAG, "Monitoring stopped before stop verification deadline; ignoring")
+            playbackResolver.reset(false)
+            return
+        }
+
+        // Re-query current playback state to ensure no signal became true at the deadline
+        val configs = audioManager.activePlaybackConfigurations
+        val hasMedia = hasMediaPlayback(configs)
+        val isMusicActive = queryIsMusicActive()
+        val isA2dpStreaming = queryIsA2dpPlaying()
+        val isAudioActive = hasMedia || isMusicActive || isA2dpStreaming
+
+        if (isAudioActive) {
+            Log.d(TAG, "Stop verification cancelled at deadline: audio signal recovered (hasMedia=$hasMedia, isMusicActive=$isMusicActive, isA2dp=$isA2dpStreaming)")
+            playbackResolver.cancelPendingStop()
+            return
+        }
+
+        // All signals remained false for full 2-second confirmation window -> emit AUDIO_STOPPED exactly once
+        val transition = playbackResolver.confirmPendingStop()
+        if (transition == PlaybackTransition.STOPPED) {
+            val currentOutput = getCurrentOutputDevice()
+            val currentType = currentOutput?.type ?: lastOutputDeviceType
+            val currentName = currentOutput?.productName?.toString() ?: lastOutputDeviceName
+            val outputAddress = if (currentOutput != null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                try { currentOutput.address ?: "" } catch (e: Exception) { "" }
+            } else ""
+
+            val reason = playbackResolver.getResolutionReason(false, false, false)
+            val diagMsg = "configs=${configs.size}, activeMedia=0, states=[], isMusicActive=false, isA2dp=false, prev=true, resolved=false, confirmed_after=${STOP_CONFIRMATION_WINDOW_MS}ms, reason=$reason"
+
+            Log.d(TAG, "Emitting STOP_CONFIRMATION_CONFIRMED and AUDIO_STOPPED for $currentName after ${STOP_CONFIRMATION_WINDOW_MS}ms confirmation window: $diagMsg")
+
+            eventListener?.onEvent(AudioEvent(
+                type = AudioEventType.STOP_CONFIRMATION_CONFIRMED,
+                timestamp = System.currentTimeMillis(),
+                isAudioPlaying = false,
+                deviceId = currentOutput?.id,
+                deviceAddress = outputAddress,
+                deviceName = currentName,
+                deviceType = getDeviceTypeName(currentType),
+                connectionType = getConnectionType(currentType),
+                diagnostics = "confirmed_after=${STOP_CONFIRMATION_WINDOW_MS}ms",
+                stopConfirmationStatus = "confirmed"
+            ))
+
+            eventListener?.onEvent(AudioEvent(
+                type = AudioEventType.AUDIO_STOPPED,
+                timestamp = System.currentTimeMillis(),
+                isAudioPlaying = false,
+                deviceId = currentOutput?.id,
+                deviceAddress = outputAddress,
+                deviceName = currentName,
+                deviceType = getDeviceTypeName(currentType),
+                connectionType = getConnectionType(currentType),
+                diagnostics = diagMsg,
+                playbackConfigsCount = configs.size,
+                activeMediaCount = 0,
+                playbackStates = "[]",
+                isMusicActive = false,
+                isA2dpStreaming = false,
+                prevPlaying = true,
+                resolvedPlaying = false,
+                resolverReason = reason,
+                stopConfirmationStatus = "confirmed"
+            ))
+        }
+
+        checkAudioOutputChange()
+    }
+
     private fun processPlaybackConfigs(configs: MutableList<AudioPlaybackConfiguration>) {
         val inspected = inspectConfigs(configs)
         val activeMediaCount = inspected.count {
@@ -493,55 +701,106 @@ class AudioMonitorEngine(private val context: Context) {
         val hasMedia = activeMediaCount > 0
         val isMusicActive = queryIsMusicActive()
         val isA2dpStreaming = queryIsA2dpPlaying()
+        val isAudioActive = hasMedia || isMusicActive || isA2dpStreaming
 
         val wasPlaying = playbackResolver.isCurrentlyPlaying
-        val transition = playbackResolver.resolve(hasMedia, isMusicActive, isA2dpStreaming)
-        val nowPlaying = playbackResolver.isCurrentlyPlaying
+        val currentTimestamp = System.currentTimeMillis()
 
-        val reason = playbackResolver.getResolutionReason(hasMedia, isMusicActive, isA2dpStreaming)
-        val statesSummary = inspected.joinToString(",") { "${it.usageName}:${it.playerStateName}" }
-        val diagMsg = "configs=${configs.size}, activeMedia=$activeMediaCount, states=[$statesSummary], isMusicActive=$isMusicActive, isA2dp=$isA2dpStreaming, prev=$wasPlaying, resolved=$nowPlaying, reason=$reason"
+        if (isAudioActive) {
+            // Audio is active -> cancel any pending stop verification immediately (playback recovered or active)
+            cancelPendingStopVerification("playback detected active")
 
-        Log.d(TAG, "Playback evaluation: transition=$transition, $diagMsg")
+            val transition = playbackResolver.resolve(hasMedia, isMusicActive, isA2dpStreaming, currentTimestamp)
+            val nowPlaying = playbackResolver.isCurrentlyPlaying
+            val reason = playbackResolver.getResolutionReason(hasMedia, isMusicActive, isA2dpStreaming)
+            val statesSummary = inspected.joinToString(",") { "${it.usageName}:${it.playerStateName}" }
+            val diagMsg = "configs=${configs.size}, activeMedia=$activeMediaCount, states=[$statesSummary], isMusicActive=$isMusicActive, isA2dp=$isA2dpStreaming, prev=$wasPlaying, resolved=$nowPlaying, reason=$reason"
 
-        val currentOutput = getCurrentOutputDevice()
-        val currentType = currentOutput?.type ?: lastOutputDeviceType
-        val currentName = currentOutput?.productName?.toString() ?: lastOutputDeviceName
-        val outputAddress = if (currentOutput != null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
-            try { currentOutput.address ?: "" } catch (e: Exception) { "" }
-        } else ""
+            Log.d(TAG, "Playback evaluation: transition=$transition, $diagMsg")
 
-        when (transition) {
-            PlaybackTransition.STARTED -> {
+            if (transition == PlaybackTransition.STARTED) {
+                val currentOutput = getCurrentOutputDevice()
+                val currentType = currentOutput?.type ?: lastOutputDeviceType
+                val currentName = currentOutput?.productName?.toString() ?: lastOutputDeviceName
+                val outputAddress = if (currentOutput != null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                    try { currentOutput.address ?: "" } catch (e: Exception) { "" }
+                } else ""
+
                 Log.d(TAG, "Emitting AUDIO_STARTED for $currentName: $diagMsg")
                 eventListener?.onEvent(AudioEvent(
                     type = AudioEventType.AUDIO_STARTED,
-                    timestamp = System.currentTimeMillis(),
+                    timestamp = currentTimestamp,
                     isAudioPlaying = true,
                     deviceId = currentOutput?.id,
                     deviceAddress = outputAddress,
                     deviceName = currentName,
                     deviceType = getDeviceTypeName(currentType),
                     connectionType = getConnectionType(currentType),
-                    diagnostics = diagMsg
+                    diagnostics = diagMsg,
+                    playbackConfigsCount = configs.size,
+                    activeMediaCount = activeMediaCount,
+                    playbackStates = statesSummary,
+                    isMusicActive = isMusicActive,
+                    isA2dpStreaming = isA2dpStreaming,
+                    prevPlaying = wasPlaying,
+                    resolvedPlaying = true,
+                    resolverReason = reason,
+                    stopConfirmationStatus = "none"
                 ))
             }
-            PlaybackTransition.STOPPED -> {
-                Log.d(TAG, "Emitting AUDIO_STOPPED for $currentName: $diagMsg")
-                eventListener?.onEvent(AudioEvent(
-                    type = AudioEventType.AUDIO_STOPPED,
-                    timestamp = System.currentTimeMillis(),
-                    isAudioPlaying = false,
-                    deviceId = currentOutput?.id,
-                    deviceAddress = outputAddress,
-                    deviceName = currentName,
-                    deviceType = getDeviceTypeName(currentType),
-                    connectionType = getConnectionType(currentType),
-                    diagnostics = diagMsg
-                ))
-            }
-            PlaybackTransition.NONE -> {
-                // Preserves active state or remains inactive without emitting duplicate events
+        } else {
+            // All audio signals are false
+            if (wasPlaying) {
+                // Playback was active -> schedule or maintain 2-second confirmation window
+                if (pendingStopRunnable == null) {
+                    val token = ++pendingStopToken
+                    playbackResolver.resolve(hasMedia, isMusicActive, isA2dpStreaming, currentTimestamp)
+
+                    val statesSummary = inspected.joinToString(",") { "${it.usageName}:${it.playerStateName}" }
+                    val diagMsg = "configs=${configs.size}, activeMedia=0, states=[$statesSummary], isMusicActive=false, isA2dp=false, prev=true, pending_stop=true, window=${STOP_CONFIRMATION_WINDOW_MS}ms"
+                    Log.d(TAG, "All playback signals false while playing; scheduling ${STOP_CONFIRMATION_WINDOW_MS}ms confirmation window: $diagMsg")
+
+                    val currentOutput = getCurrentOutputDevice()
+                    val currentType = currentOutput?.type ?: lastOutputDeviceType
+                    val currentName = currentOutput?.productName?.toString() ?: lastOutputDeviceName
+                    val outputAddress = if (currentOutput != null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                        try { currentOutput.address ?: "" } catch (e: Exception) { "" }
+                    } else ""
+
+                    eventListener?.onEvent(AudioEvent(
+                        type = AudioEventType.STOP_CONFIRMATION_SCHEDULED,
+                        timestamp = currentTimestamp,
+                        isAudioPlaying = true,
+                        deviceId = currentOutput?.id,
+                        deviceAddress = outputAddress,
+                        deviceName = currentName,
+                        deviceType = getDeviceTypeName(currentType),
+                        connectionType = getConnectionType(currentType),
+                        diagnostics = diagMsg,
+                        playbackConfigsCount = configs.size,
+                        activeMediaCount = 0,
+                        playbackStates = statesSummary,
+                        isMusicActive = false,
+                        isA2dpStreaming = false,
+                        prevPlaying = true,
+                        resolvedPlaying = true,
+                        resolverReason = "no_active_media_or_sound",
+                        stopConfirmationStatus = "scheduled"
+                    ))
+
+                    val runnable = Runnable {
+                        handleStopVerificationDeadline(token)
+                    }
+                    pendingStopRunnable = runnable
+                    mainHandler.postDelayed(runnable, STOP_CONFIRMATION_WINDOW_MS)
+                } else {
+                    // Duplicate or intermediate callback during the pending window -> do not reschedule or duplicate
+                    playbackResolver.resolve(hasMedia, isMusicActive, isA2dpStreaming, currentTimestamp)
+                    Log.d(TAG, "All playback signals still false; confirmation window already running (token=$pendingStopToken)")
+                }
+            } else {
+                // Not playing and all signals false -> remain inactive (connected-but-idle)
+                playbackResolver.resolve(hasMedia, isMusicActive, isA2dpStreaming, currentTimestamp)
             }
         }
 
@@ -659,7 +918,10 @@ enum class AudioEventType {
     DEVICE_DISCONNECTED,
     AUDIO_STARTED,
     AUDIO_STOPPED,
-    AUDIO_OUTPUT_CHANGED
+    AUDIO_OUTPUT_CHANGED,
+    STOP_CONFIRMATION_SCHEDULED,
+    STOP_CONFIRMATION_CANCELLED,
+    STOP_CONFIRMATION_CONFIRMED
 }
 
 data class AudioEvent(
@@ -673,7 +935,16 @@ data class AudioEvent(
     val isAudioPlaying: Boolean? = null,
     val previousDeviceName: String? = null,
     val previousDeviceType: String? = null,
-    val diagnostics: String? = null
+    val diagnostics: String? = null,
+    val playbackConfigsCount: Int? = null,
+    val activeMediaCount: Int? = null,
+    val playbackStates: String? = null,
+    val isMusicActive: Boolean? = null,
+    val isA2dpStreaming: Boolean? = null,
+    val prevPlaying: Boolean? = null,
+    val resolvedPlaying: Boolean? = null,
+    val resolverReason: String? = null,
+    val stopConfirmationStatus: String? = null
 ) {
     fun toMap(): Map<String, Any?> = mapOf(
         "type" to type.name,
@@ -686,7 +957,16 @@ data class AudioEvent(
         "isAudioPlaying" to isAudioPlaying,
         "previousDeviceName" to previousDeviceName,
         "previousDeviceType" to previousDeviceType,
-        "diagnostics" to diagnostics
+        "diagnostics" to diagnostics,
+        "playbackConfigsCount" to playbackConfigsCount,
+        "activeMediaCount" to activeMediaCount,
+        "playbackStates" to playbackStates,
+        "isMusicActive" to isMusicActive,
+        "isA2dpStreaming" to isA2dpStreaming,
+        "prevPlaying" to prevPlaying,
+        "resolvedPlaying" to resolvedPlaying,
+        "resolverReason" to resolverReason,
+        "stopConfirmationStatus" to stopConfirmationStatus
     )
 }
 

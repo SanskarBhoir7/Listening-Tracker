@@ -15,45 +15,56 @@ import androidx.core.app.ServiceCompat
 /**
  * Minimal foreground service for continuous audio/device monitoring.
  *
- * WHY A FOREGROUND SERVICE IS NEEDED:
- * Android aggressively kills background processes. Without a foreground service,
- * the AudioDeviceCallback and AudioPlaybackCallback would stop receiving events
- * when the user switches to another app or locks the screen.
- *
- * A foreground service with a persistent notification keeps the process alive
- * and allows continuous monitoring.
- *
- * WHY specialUse (NOT mediaPlayback):
- * This app does NOT play audio — it monitors audio state. The mediaPlayback
- * foreground service type is reserved for apps that actually play/stream media.
- * specialUse is the correct type for monitoring/tracking use cases.
- *
- * This is the MINIMUM viable foreground service. It:
- * 1. Shows a persistent notification
- * 2. Keeps the process alive
- * 3. Delegates all actual work to AudioMonitorEngine
+ * Keeps the application process alive and active when Bluetooth earbuds are connected
+ * and audio playback is being monitored, without keeping an unnecessary always-on
+ * foreground service when no audio devices are connected.
  */
 class AudioMonitorService : Service() {
 
     companion object {
         private const val TAG = "AudioMonitorService"
-        private const val NOTIFICATION_CHANNEL_ID = "listening_tracker_monitor"
-        private const val NOTIFICATION_ID = 1001
+        const val NOTIFICATION_CHANNEL_ID = "listening_tracker_monitor"
+        const val NOTIFICATION_ID = 1001
 
-        // Singleton engine reference shared with the Flutter plugin
+        const val ACTION_START_MONITORING = "com.listeningtracker.action.START_MONITORING"
+        const val ACTION_STOP_MONITORING = "com.listeningtracker.action.STOP_MONITORING"
+        const val EXTRA_DEVICE_NAME = "device_name"
+        const val EXTRA_DEVICE_ADDRESS = "device_address"
+
+        // Engine reference shared with the Flutter plugin
         var monitorEngine: AudioMonitorEngine? = null
     }
 
+    private var activeDeviceName: String? = null
+
     override fun onCreate() {
         super.onCreate()
-        Log.d(TAG, "Service created")
+        Log.d(TAG, "AudioMonitorService created")
+        NativeLifecycleDiagnostics.record(this, "SERVICE_CREATED")
         createNotificationChannel()
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        Log.d(TAG, "Service started")
+        val action = intent?.action
+        Log.d(TAG, "Service onStartCommand: action=$action")
+        NativeLifecycleDiagnostics.record(this, "SERVICE_START_COMMAND", mapOf(
+            "action" to (action ?: "sticky_restart_null_intent"),
+            "startId" to startId,
+        ))
 
-        val notification = buildNotification()
+        if (action == ACTION_STOP_MONITORING) {
+            Log.d(TAG, "Handling ACTION_STOP_MONITORING: stopping foreground service")
+            stopForeground(STOP_FOREGROUND_REMOVE)
+            stopSelf()
+            return START_NOT_STICKY
+        }
+
+        val deviceNameExtra = intent?.getStringExtra(EXTRA_DEVICE_NAME)
+        if (!deviceNameExtra.isNullOrBlank()) {
+            activeDeviceName = deviceNameExtra
+        }
+
+        val notification = buildNotification(activeDeviceName)
 
         // Verify runtime prerequisites for connectedDevice FGS type (BLUETOOTH_CONNECT on API 31+)
         val hasBtConnect = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
@@ -66,6 +77,7 @@ class AudioMonitorService : Service() {
         }
 
         // Start as foreground service with appropriate type (connectedDevice on API 34+ if permitted)
+        var foregroundStarted = false
         try {
             val fgsType = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
                 if (hasBtConnect) {
@@ -84,29 +96,66 @@ class AudioMonitorService : Service() {
                 notification,
                 fgsType
             )
+            foregroundStarted = true
         } catch (e: Exception) {
             Log.e(TAG, "Failed to start foreground service with specific type, falling back", e)
             try {
                 startForeground(NOTIFICATION_ID, notification)
+                foregroundStarted = true
+                NativeLifecycleDiagnostics.record(this, "FOREGROUND_PROMOTION_FALLBACK_SUCCEEDED", mapOf("primaryError" to e.javaClass.name))
             } catch (fallbackEx: Exception) {
                 Log.e(TAG, "Fatal fallback startForeground failure", fallbackEx)
+                NativeLifecycleDiagnostics.record(this, "FOREGROUND_PROMOTION_FAILED", mapOf(
+                    "primaryError" to e.javaClass.name,
+                    "primaryMessage" to (e.message ?: ""),
+                    "fallbackError" to fallbackEx.javaClass.name,
+                    "fallbackMessage" to (fallbackEx.message ?: ""),
+                ))
             }
         }
 
-        // Initialize the audio monitor engine if not already running
-        if (monitorEngine == null) {
-            val engine = AudioMonitorEngine(applicationContext)
-            monitorEngine = engine
-            engine.initialize()
+        if (!foregroundStarted) {
+            AudioMonitorBridge.notifyMonitoringState(this, false, "foreground_promotion_failed")
+            AudioMonitorBridge.monitorEngine?.stopMonitoring()
+            stopSelf(startId)
+            return START_NOT_STICKY
         }
-        monitorEngine?.startMonitoring()
+        NativeLifecycleDiagnostics.record(this, "FOREGROUND_PROMOTION_SUCCEEDED", mapOf("fgsType" to if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) "connectedDevice|specialUse" else "specialUse"))
 
-        // If the service is killed by the system, restart it
+        // Initialize and wire FlutterEngine and AudioMonitorEngine via AudioMonitorBridge
+        try {
+            val engine = AudioMonitorBridge.getOrCreateMonitorEngine(applicationContext)
+            AudioMonitorBridge.ensureFlutterEngine(applicationContext)
+            monitorEngine = engine
+            engine.startMonitoring()
+            if (!engine.isMonitoring) {
+                NativeLifecycleDiagnostics.record(this, "SERVICE_NATIVE_MONITORING_INACTIVE")
+                AudioMonitorBridge.notifyMonitoringState(this, false, "native_callback_registration_failed")
+                stopForeground(STOP_FOREGROUND_REMOVE)
+                stopSelf(startId)
+                return START_NOT_STICKY
+            }
+        } catch (error: Exception) {
+            NativeLifecycleDiagnostics.record(this, "SERVICE_INITIALIZATION_FAILED", mapOf(
+                "error" to error.javaClass.name,
+                "message" to (error.message ?: ""),
+            ))
+            AudioMonitorBridge.notifyMonitoringState(this, false, "service_initialization_failed")
+            AudioMonitorBridge.monitorEngine?.stopMonitoring()
+            stopForeground(STOP_FOREGROUND_REMOVE)
+            stopSelf(startId)
+            return START_NOT_STICKY
+        }
+        AudioMonitorBridge.notifyMonitoringState(this, true, "service_started")
+
+        // If the service is killed by the system, restart it while tracking
         return START_STICKY
     }
 
     override fun onDestroy() {
-        Log.d(TAG, "Service destroyed")
+        Log.d(TAG, "AudioMonitorService destroyed")
+        NativeLifecycleDiagnostics.record(this, "SERVICE_DESTROYED")
+        AudioMonitorBridge.notifyMonitoringState(this, false, "service_destroyed")
         monitorEngine?.stopMonitoring()
         super.onDestroy()
     }
@@ -116,7 +165,7 @@ class AudioMonitorService : Service() {
     private fun createNotificationChannel() {
         val channel = NotificationChannel(
             NOTIFICATION_CHANNEL_ID,
-            "Listening Tracker",
+            "Listening Tracker Monitor",
             NotificationManager.IMPORTANCE_LOW  // Low importance = no sound, minimal visual
         ).apply {
             description = "Monitors audio device and playback state"
@@ -127,8 +176,7 @@ class AudioMonitorService : Service() {
         notificationManager.createNotificationChannel(channel)
     }
 
-    private fun buildNotification(): Notification {
-        // Tapping the notification opens the app
+    private fun buildNotification(deviceName: String?): Notification {
         val intent = Intent(this, MainActivity::class.java).apply {
             flags = Intent.FLAG_ACTIVITY_SINGLE_TOP
         }
@@ -137,9 +185,15 @@ class AudioMonitorService : Service() {
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
 
+        val contentText = if (!deviceName.isNullOrBlank()) {
+            "Monitoring active: $deviceName"
+        } else {
+            "Monitoring audio devices"
+        }
+
         return Notification.Builder(this, NOTIFICATION_CHANNEL_ID)
             .setContentTitle("Listening Tracker")
-            .setContentText("Monitoring audio devices")
+            .setContentText(contentText)
             .setSmallIcon(android.R.drawable.ic_media_play)
             .setContentIntent(pendingIntent)
             .setOngoing(true)

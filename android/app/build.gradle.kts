@@ -50,6 +50,7 @@ dependencies {
     // Required for ServiceCompat.startForeground() which handles
     // foreground service type compatibility across API levels
     implementation("androidx.core:core-ktx:1.15.0")
+    testImplementation("junit:junit:4.13.2")
 }
 
 flutter {

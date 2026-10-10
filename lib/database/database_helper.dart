@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'package:flutter/foundation.dart';
 import 'package:path/path.dart' as p;
 import 'package:sqflite/sqflite.dart';
 import '../models/audio_device.dart';
@@ -6,6 +7,7 @@ import '../models/connection_record.dart';
 import '../models/continuous_session.dart';
 import '../models/daily_stats.dart';
 import '../models/device_usage_stats.dart';
+import '../models/diagnostic_event.dart';
 import '../models/listening_session.dart';
 import '../models/period_stats.dart';
 import 'database_adapter.dart';
@@ -15,9 +17,44 @@ import 'database_adapter.dart';
 /// - Device Listening Sessions
 /// - Continuous Listening Sessions
 /// - Bluetooth Connection Records (Phase 3 v2)
+/// - Diagnostic Event Logs (Phase 5 v3)
 class DatabaseHelper implements DatabaseAdapter {
   static final DatabaseHelper instance = DatabaseHelper._init();
   static Database? _database;
+  static int _diagnosticWriteCounter = 0;
+  static const int maxDiagnosticEvents = 10000;
+  static const int databaseVersion = 3;
+
+  static const String createDiagnosticEventsTableSql = '''
+    CREATE TABLE IF NOT EXISTS diagnostic_events (
+      id TEXT PRIMARY KEY,
+      timestamp INTEGER NOT NULL,
+      timestamp_iso TEXT NOT NULL,
+      event_type TEXT NOT NULL,
+      source TEXT NOT NULL,
+      device_id TEXT,
+      device_name TEXT,
+      device_type TEXT,
+      connection_type TEXT,
+      connection_state TEXT,
+      audio_state TEXT,
+      session_state TEXT,
+      reason TEXT,
+      details TEXT,
+      playback_configs_count INTEGER,
+      active_media_count INTEGER,
+      playback_states TEXT,
+      is_music_active INTEGER,
+      is_a2dp_streaming INTEGER,
+      prev_playing INTEGER,
+      resolved_playing INTEGER,
+      resolver_reason TEXT,
+      stop_confirmation_status TEXT,
+      duration_seconds INTEGER,
+      error_details TEXT,
+      metadata_json TEXT
+    )
+  ''';
 
   DatabaseHelper._init();
 
@@ -33,7 +70,7 @@ class DatabaseHelper implements DatabaseAdapter {
 
     return await openDatabase(
       path,
-      version: 2,
+      version: 3,
       onCreate: _createDB,
       onUpgrade: _onUpgradeDB,
     );
@@ -93,12 +130,19 @@ class DatabaseHelper implements DatabaseAdapter {
 
     // Phase 3 tables
     await _createConnectionRecordsTable(db);
+
+    // Phase 5 tables
+    await _createDiagnosticEventsTable(db);
   }
 
   Future<void> _onUpgradeDB(Database db, int oldVersion, int newVersion) async {
     if (oldVersion < 2) {
       // Migrate v1 -> v2: Add connection_records table and indexes without altering existing tables
       await _createConnectionRecordsTable(db);
+    }
+    if (oldVersion < 3) {
+      // Migrate v2 -> v3: Add diagnostic_events table and indexes without altering existing tables
+      await _createDiagnosticEventsTable(db);
     }
   }
 
@@ -125,6 +169,49 @@ class DatabaseHelper implements DatabaseAdapter {
     await db.execute('''
       CREATE INDEX IF NOT EXISTS idx_connection_records_device_id 
       ON connection_records(device_id)
+    ''');
+  }
+
+  Future<void> _createDiagnosticEventsTable(Database db) async {
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS diagnostic_events (
+        id TEXT PRIMARY KEY,
+        timestamp INTEGER NOT NULL,
+        timestamp_iso TEXT NOT NULL,
+        event_type TEXT NOT NULL,
+        source TEXT NOT NULL,
+        device_id TEXT,
+        device_name TEXT,
+        device_type TEXT,
+        connection_type TEXT,
+        connection_state TEXT,
+        audio_state TEXT,
+        session_state TEXT,
+        reason TEXT,
+        details TEXT,
+        playback_configs_count INTEGER,
+        active_media_count INTEGER,
+        playback_states TEXT,
+        is_music_active INTEGER,
+        is_a2dp_streaming INTEGER,
+        prev_playing INTEGER,
+        resolved_playing INTEGER,
+        resolver_reason TEXT,
+        stop_confirmation_status TEXT,
+        duration_seconds INTEGER,
+        error_details TEXT,
+        metadata_json TEXT
+      )
+    ''');
+
+    await db.execute('''
+      CREATE INDEX IF NOT EXISTS idx_diagnostic_events_timestamp
+      ON diagnostic_events(timestamp DESC)
+    ''');
+
+    await db.execute('''
+      CREATE INDEX IF NOT EXISTS idx_diagnostic_events_event_type
+      ON diagnostic_events(event_type)
     ''');
   }
 
@@ -571,6 +658,174 @@ class DatabaseHelper implements DatabaseAdapter {
     }
     final list = dates.toList()..sort((a, b) => b.compareTo(a));
     return list;
+  }
+
+  // =========================================================================
+  // Diagnostic Events CRUD (Phase 5)
+  // =========================================================================
+
+  @override
+  Future<void> saveDiagnosticEvent(DiagnosticEvent event) async {
+    try {
+      final db = await database;
+      await db.insert(
+        'diagnostic_events',
+        event.toMap(),
+        conflictAlgorithm: ConflictAlgorithm.replace,
+      );
+
+      // Batch prune every 100 writes to keep table lean without impacting performance
+      _diagnosticWriteCounter++;
+      if (_diagnosticWriteCounter % 100 == 0) {
+        unawaited(pruneDiagnosticEvents());
+      }
+    } catch (e) {
+      debugPrint('DatabaseHelper: Failed to save diagnostic event: $e');
+    }
+  }
+
+  @override
+  Future<void> saveDiagnosticEvents(List<DiagnosticEvent> events) async {
+    if (events.isEmpty) return;
+    try {
+      final db = await database;
+      final batch = db.batch();
+      for (final e in events) {
+        batch.insert(
+          'diagnostic_events',
+          e.toMap(),
+          conflictAlgorithm: ConflictAlgorithm.replace,
+        );
+      }
+      await batch.commit(noResult: true);
+
+      _diagnosticWriteCounter += events.length;
+      if (_diagnosticWriteCounter % 100 == 0) {
+        unawaited(pruneDiagnosticEvents());
+      }
+    } catch (e) {
+      debugPrint('DatabaseHelper: Failed to batch save diagnostic events: $e');
+    }
+  }
+
+  @override
+  Future<List<DiagnosticEvent>> getDiagnosticEvents({
+    int limit = 100,
+    int offset = 0,
+    String? eventType,
+    int? startTimeMs,
+    int? endTimeMs,
+  }) async {
+    try {
+      final db = await database;
+      final conditions = <String>[];
+      final args = <dynamic>[];
+
+      if (eventType != null && eventType.isNotEmpty) {
+        conditions.add('event_type = ?');
+        args.add(eventType);
+      }
+      if (startTimeMs != null) {
+        conditions.add('timestamp >= ?');
+        args.add(startTimeMs);
+      }
+      if (endTimeMs != null) {
+        conditions.add('timestamp <= ?');
+        args.add(endTimeMs);
+      }
+
+      final whereClause = conditions.isNotEmpty ? conditions.join(' AND ') : null;
+      final maps = await db.query(
+        'diagnostic_events',
+        where: whereClause,
+        whereArgs: args.isNotEmpty ? args : null,
+        orderBy: 'timestamp DESC',
+        limit: limit,
+        offset: offset,
+      );
+
+      return maps.map((m) => DiagnosticEvent.fromMap(m)).toList();
+    } catch (e) {
+      debugPrint('DatabaseHelper: Failed to query diagnostic events: $e');
+      return [];
+    }
+  }
+
+  @override
+  Future<int> getDiagnosticEventCount({
+    String? eventType,
+    int? startTimeMs,
+    int? endTimeMs,
+  }) async {
+    try {
+      final db = await database;
+      final conditions = <String>[];
+      final args = <dynamic>[];
+
+      if (eventType != null && eventType.isNotEmpty) {
+        conditions.add('event_type = ?');
+        args.add(eventType);
+      }
+      if (startTimeMs != null) {
+        conditions.add('timestamp >= ?');
+        args.add(startTimeMs);
+      }
+      if (endTimeMs != null) {
+        conditions.add('timestamp <= ?');
+        args.add(endTimeMs);
+      }
+
+      final whereClause = conditions.isNotEmpty ? 'WHERE ${conditions.join(' AND ')}' : '';
+      final result = await db.rawQuery(
+        'SELECT COUNT(*) as count FROM diagnostic_events $whereClause',
+        args.isNotEmpty ? args : null,
+      );
+
+      if (result.isNotEmpty) {
+        return (result.first['count'] as int?) ?? 0;
+      }
+      return 0;
+    } catch (e) {
+      debugPrint('DatabaseHelper: Failed to count diagnostic events: $e');
+      return 0;
+    }
+  }
+
+  @override
+  Future<int> pruneDiagnosticEvents({int keepLatest = maxDiagnosticEvents}) async {
+    try {
+      final db = await database;
+      final total = await getDiagnosticEventCount();
+      if (total <= keepLatest) return 0;
+
+      // Safe deletion of older diagnostic events beyond keepLatest
+      final deleted = await db.rawDelete(
+        '''
+        DELETE FROM diagnostic_events
+        WHERE id NOT IN (
+          SELECT id FROM diagnostic_events
+          ORDER BY timestamp DESC
+          LIMIT ?
+        )
+        ''',
+        [keepLatest],
+      );
+      debugPrint('DatabaseHelper: Pruned $deleted old diagnostic events (kept latest $keepLatest)');
+      return deleted;
+    } catch (e) {
+      debugPrint('DatabaseHelper: Failed to prune diagnostic events: $e');
+      return 0;
+    }
+  }
+
+  @override
+  Future<void> clearDiagnosticEvents() async {
+    try {
+      final db = await database;
+      await db.delete('diagnostic_events');
+    } catch (e) {
+      debugPrint('DatabaseHelper: Failed to clear diagnostic events: $e');
+    }
   }
 }
 

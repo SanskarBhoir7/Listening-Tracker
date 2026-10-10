@@ -9,27 +9,80 @@ enum PlaybackTransition {
 
 class PlaybackStateResolver {
   bool _isPlaying;
+  final int confirmationWindowMs;
+  bool _isStopPending = false;
+  int? _stopPendingSinceMs;
 
-  PlaybackStateResolver([this._isPlaying = false]);
+  PlaybackStateResolver([
+    this._isPlaying = false,
+    this.confirmationWindowMs = 2000,
+  ]);
 
   bool get isCurrentlyPlaying => _isPlaying;
+  bool get isStopPending => _isStopPending;
+  int? get stopPendingSinceMs => _stopPendingSinceMs;
 
   PlaybackTransition resolve({
     required bool hasMediaConfig,
     required bool isMusicActive,
     bool isA2dpStreaming = false,
+    int? currentTimeMs,
   }) {
+    final now = currentTimeMs ?? DateTime.now().millisecondsSinceEpoch;
     final isAudioActive = hasMediaConfig || isMusicActive || isA2dpStreaming;
 
     if (!_isPlaying && isAudioActive) {
       _isPlaying = true;
+      _isStopPending = false;
+      _stopPendingSinceMs = null;
       return PlaybackTransition.started;
-    } else if (_isPlaying && !hasMediaConfig && !isMusicActive && !isA2dpStreaming) {
-      _isPlaying = false;
-      return PlaybackTransition.stopped;
-    } else {
+    }
+
+    if (_isPlaying && isAudioActive) {
+      // Audio recovered or remains active -> cancel any pending stop window
+      _isStopPending = false;
+      _stopPendingSinceMs = null;
       return PlaybackTransition.none;
     }
+
+    if (_isPlaying && !isAudioActive) {
+      final pendingSince = _stopPendingSinceMs;
+      if (!_isStopPending || pendingSince == null) {
+        // First detection of all false signals: start confirmation window
+        _isStopPending = true;
+        _stopPendingSinceMs = now;
+        return PlaybackTransition.none;
+      } else {
+        final elapsed = now - pendingSince;
+        if (elapsed >= confirmationWindowMs) {
+          // Full window elapsed with continuous false signals -> genuine stop
+          _isPlaying = false;
+          _isStopPending = false;
+          _stopPendingSinceMs = null;
+          return PlaybackTransition.stopped;
+        } else {
+          // Still within confirmation window -> remain active, emit nothing
+          return PlaybackTransition.none;
+        }
+      }
+    }
+
+    return PlaybackTransition.none;
+  }
+
+  PlaybackTransition confirmPendingStop() {
+    if (_isPlaying && _isStopPending) {
+      _isPlaying = false;
+      _isStopPending = false;
+      _stopPendingSinceMs = null;
+      return PlaybackTransition.stopped;
+    }
+    return PlaybackTransition.none;
+  }
+
+  void cancelPendingStop() {
+    _isStopPending = false;
+    _stopPendingSinceMs = null;
   }
 
   String getResolutionReason({
@@ -45,114 +98,250 @@ class PlaybackStateResolver {
 
   void reset([bool initialPlaying = false]) {
     _isPlaying = initialPlaying;
+    _isStopPending = false;
+    _stopPendingSinceMs = null;
   }
 }
 
 void main() {
-  group('Native PlaybackStateResolver Specification Tests (Tests 1-7)', () {
+  group('Native PlaybackStateResolver 2-Second Confirmation Window Specification Tests', () {
     late PlaybackStateResolver resolver;
 
     setUp(() {
-      resolver = PlaybackStateResolver();
+      resolver = PlaybackStateResolver(false, 2000);
     });
 
-    test('Test 1: Continuous playback with temporary configuration loss => No AUDIO_STOPPED', () {
-      // Setup: initially playing
+    test('Requirement 1: AUDIO_STARTED remains immediate (0ms latency)', () {
+      resolver.reset(false);
+      expect(resolver.isCurrentlyPlaying, isFalse);
+
+      final transition = resolver.resolve(
+        hasMediaConfig: true,
+        isMusicActive: false,
+        isA2dpStreaming: false,
+        currentTimeMs: 1000,
+      );
+
+      expect(transition, equals(PlaybackTransition.started));
+      expect(resolver.isCurrentlyPlaying, isTrue);
+      expect(resolver.isStopPending, isFalse);
+    });
+
+    test('Requirement 2: Transient signal loss (<2s) schedules confirmation window and does NOT emit STOPPED', () {
       resolver.reset(true);
       expect(resolver.isCurrentlyPlaying, isTrue);
 
-      // Media configuration temporarily disappears, but Bluetooth A2DP is still streaming or music is active
-      final transitionA = resolver.resolve(hasMediaConfig: false, isMusicActive: false, isA2dpStreaming: true);
-      expect(transitionA, equals(PlaybackTransition.none));
-      expect(resolver.isCurrentlyPlaying, isTrue);
+      // All signals drop to false at t=1000ms
+      final transitionA = resolver.resolve(
+        hasMediaConfig: false,
+        isMusicActive: false,
+        isA2dpStreaming: false,
+        currentTimeMs: 1000,
+      );
 
-      final transitionB = resolver.resolve(hasMediaConfig: false, isMusicActive: true, isA2dpStreaming: false);
+      expect(transitionA, equals(PlaybackTransition.none));
+      expect(resolver.isCurrentlyPlaying, isTrue); // Still considered playing
+      expect(resolver.isStopPending, isTrue);
+      expect(resolver.stopPendingSinceMs, equals(1000));
+
+      // Another check within window at t=1800ms (800ms elapsed < 2000ms)
+      final transitionB = resolver.resolve(
+        hasMediaConfig: false,
+        isMusicActive: false,
+        isA2dpStreaming: false,
+        currentTimeMs: 1800,
+      );
+
       expect(transitionB, equals(PlaybackTransition.none));
       expect(resolver.isCurrentlyPlaying, isTrue);
+      expect(resolver.isStopPending, isTrue);
     });
 
-    test('Test 2: playerState transitions (STARTED vs PAUSED) => Correct resolution', () {
-      resolver.reset(false);
-
-      // Player in STARTED state: hasMediaConfig is true
-      final startTransition = resolver.resolve(hasMediaConfig: true, isMusicActive: false);
-      expect(startTransition, equals(PlaybackTransition.started));
-      expect(resolver.isCurrentlyPlaying, isTrue);
-
-      // Player transitions to PAUSED: hasMediaConfig becomes false, music not active, not streaming
-      final pauseTransition = resolver.resolve(hasMediaConfig: false, isMusicActive: false, isA2dpStreaming: false);
-      expect(pauseTransition, equals(PlaybackTransition.stopped));
-      expect(resolver.isCurrentlyPlaying, isFalse);
-    });
-
-    test('Test 3: isMusicActive transitions => Triggers start and sustains playback', () {
-      resolver.reset(false);
-
-      // When config is delayed but isMusicActive is true, transitions to active
-      final startTransition = resolver.resolve(hasMediaConfig: false, isMusicActive: true);
-      expect(startTransition, equals(PlaybackTransition.started));
-      expect(resolver.isCurrentlyPlaying, isTrue);
-
-      // When isMusicActive drops but media config is present, remains active
-      final sustainTransition = resolver.resolve(hasMediaConfig: true, isMusicActive: false);
-      expect(sustainTransition, equals(PlaybackTransition.none));
-      expect(resolver.isCurrentlyPlaying, isTrue);
-    });
-
-    test('Test 4: Multiple playback configs where one disappears but another remains => No AUDIO_STOPPED', () {
+    test('Requirement 3: Playback recovery before deadline cancels pending stop and keeps session active', () {
       resolver.reset(true);
 
-      // Multiple configs exist (e.g. system sound ends, music remains) -> hasMediaConfig is true
-      final transition = resolver.resolve(hasMediaConfig: true, isMusicActive: true, isA2dpStreaming: true);
-      expect(transition, equals(PlaybackTransition.none));
+      // Drop at t=1000ms
+      final drop = resolver.resolve(
+        hasMediaConfig: false,
+        isMusicActive: false,
+        isA2dpStreaming: false,
+        currentTimeMs: 1000,
+      );
+      expect(drop, equals(PlaybackTransition.none));
+      expect(resolver.isStopPending, isTrue);
+
+      // Next track starts at t=1800ms (< 2000ms window)
+      final recovery = resolver.resolve(
+        hasMediaConfig: true,
+        isMusicActive: false,
+        isA2dpStreaming: false,
+        currentTimeMs: 1800,
+      );
+
+      expect(recovery, equals(PlaybackTransition.none));
       expect(resolver.isCurrentlyPlaying, isTrue);
+      expect(resolver.isStopPending, isFalse);
+      expect(resolver.stopPendingSinceMs, isNull);
     });
 
-    test('Test 5: Genuine pause => Emits AUDIO_STOPPED exactly once', () {
+    test('Requirement 4: Genuine pause: all signals remain false for full window (>=2000ms) => emits STOPPED exactly once', () {
       resolver.reset(true);
 
-      // Genuine pause: all signals indicate no audio
-      final transition = resolver.resolve(hasMediaConfig: false, isMusicActive: false, isA2dpStreaming: false);
-      expect(transition, equals(PlaybackTransition.stopped));
-      expect(resolver.isCurrentlyPlaying, isFalse);
-      expect(resolver.getResolutionReason(hasMediaConfig: false, isMusicActive: false, isA2dpStreaming: false),
-          equals('no_active_media_or_sound'));
+      // Signals drop at t=1000ms
+      final drop = resolver.resolve(
+        hasMediaConfig: false,
+        isMusicActive: false,
+        isA2dpStreaming: false,
+        currentTimeMs: 1000,
+      );
+      expect(drop, equals(PlaybackTransition.none));
+      expect(resolver.isStopPending, isTrue);
 
-      // Subsequent identical inactive call emits nothing
-      final repeat = resolver.resolve(hasMediaConfig: false, isMusicActive: false, isA2dpStreaming: false);
+      // Window expired at t=3000ms (2000ms elapsed)
+      final stop = resolver.resolve(
+        hasMediaConfig: false,
+        isMusicActive: false,
+        isA2dpStreaming: false,
+        currentTimeMs: 3000,
+      );
+      expect(stop, equals(PlaybackTransition.stopped));
+      expect(resolver.isCurrentlyPlaying, isFalse);
+      expect(resolver.isStopPending, isFalse);
+
+      // Subsequent identical calls while inactive emit none
+      final repeat = resolver.resolve(
+        hasMediaConfig: false,
+        isMusicActive: false,
+        isA2dpStreaming: false,
+        currentTimeMs: 3500,
+      );
       expect(repeat, equals(PlaybackTransition.none));
       expect(resolver.isCurrentlyPlaying, isFalse);
     });
 
-    test('Test 6: Genuine resume => Emits AUDIO_STARTED exactly once', () {
-      resolver.reset(false);
+    test('Requirement 4: confirmPendingStop emits STOPPED exactly once and prevents duplicates', () {
+      resolver.reset(true);
 
-      // Resumes playback
-      final transition = resolver.resolve(hasMediaConfig: true, isMusicActive: true, isA2dpStreaming: true);
-      expect(transition, equals(PlaybackTransition.started));
-      expect(resolver.isCurrentlyPlaying, isTrue);
-      expect(resolver.getResolutionReason(hasMediaConfig: true, isMusicActive: true, isA2dpStreaming: true),
-          equals('active_media_configuration'));
+      resolver.resolve(
+        hasMediaConfig: false,
+        isMusicActive: false,
+        isA2dpStreaming: false,
+        currentTimeMs: 1000,
+      );
+      expect(resolver.isStopPending, isTrue);
+
+      final confirmed = resolver.confirmPendingStop();
+      expect(confirmed, equals(PlaybackTransition.stopped));
+      expect(resolver.isCurrentlyPlaying, isFalse);
+      expect(resolver.isStopPending, isFalse);
+
+      // Second invocation emits none
+      final duplicate = resolver.confirmPendingStop();
+      expect(duplicate, equals(PlaybackTransition.none));
     });
 
-    test('Test 7: No duplicate start/stop events across repeated identical states', () {
+    test('Requirement 5: Bluetooth disconnection during pending window cancels verification immediately', () {
+      resolver.reset(true);
+
+      resolver.resolve(
+        hasMediaConfig: false,
+        isMusicActive: false,
+        isA2dpStreaming: false,
+        currentTimeMs: 1000,
+      );
+      expect(resolver.isStopPending, isTrue);
+
+      // Disconnect occurs at t=1400ms
+      resolver.cancelPendingStop();
+      expect(resolver.isStopPending, isFalse);
+      resolver.reset(false);
+      expect(resolver.isCurrentlyPlaying, isFalse);
+
+      // Stale timer firing at t=3000ms produces no event
+      expect(resolver.confirmPendingStop(), equals(PlaybackTransition.none));
+    });
+
+    test('Requirement 6: Duplicate callbacks during pending window preserve original deadline', () {
+      resolver.reset(true);
+
+      resolver.resolve(
+        hasMediaConfig: false,
+        isMusicActive: false,
+        isA2dpStreaming: false,
+        currentTimeMs: 1000,
+      );
+      expect(resolver.stopPendingSinceMs, equals(1000));
+
+      for (final time in [1200, 1400, 1600, 1800]) {
+        final trans = resolver.resolve(
+          hasMediaConfig: false,
+          isMusicActive: false,
+          isA2dpStreaming: false,
+          currentTimeMs: time,
+        );
+        expect(trans, equals(PlaybackTransition.none));
+        expect(resolver.stopPendingSinceMs, equals(1000));
+        expect(resolver.isCurrentlyPlaying, isTrue);
+      }
+
+      // At t=3000ms (2000ms from t=1000ms), stop is emitted
+      final finalTrans = resolver.resolve(
+        hasMediaConfig: false,
+        isMusicActive: false,
+        isA2dpStreaming: false,
+        currentTimeMs: 3000,
+      );
+      expect(finalTrans, equals(PlaybackTransition.stopped));
+      expect(resolver.isCurrentlyPlaying, isFalse);
+    });
+
+    test('Requirement 7: Connected-but-idle never counts as active playback', () {
       resolver.reset(false);
 
-      // Start once
-      expect(resolver.resolve(hasMediaConfig: true, isMusicActive: true), equals(PlaybackTransition.started));
-
-      // 5 repeated active calls => all none
-      for (int i = 0; i < 5; i++) {
-        expect(resolver.resolve(hasMediaConfig: true, isMusicActive: true), equals(PlaybackTransition.none));
+      for (final time in [1000, 2000, 3000]) {
+        final trans = resolver.resolve(
+          hasMediaConfig: false,
+          isMusicActive: false,
+          isA2dpStreaming: false,
+          currentTimeMs: time,
+        );
+        expect(trans, equals(PlaybackTransition.none));
+        expect(resolver.isCurrentlyPlaying, isFalse);
+        expect(resolver.isStopPending, isFalse);
       }
+    });
 
-      // Stop once
-      expect(resolver.resolve(hasMediaConfig: false, isMusicActive: false), equals(PlaybackTransition.stopped));
+    test('Continuous playback with A2DP or music active preserves playing state without stop', () {
+      resolver.reset(true);
 
-      // 5 repeated inactive calls => all none
-      for (int i = 0; i < 5; i++) {
-        expect(resolver.resolve(hasMediaConfig: false, isMusicActive: false), equals(PlaybackTransition.none));
-      }
+      // Config lost, but Bluetooth A2DP is streaming
+      final transA = resolver.resolve(
+        hasMediaConfig: false,
+        isMusicActive: false,
+        isA2dpStreaming: true,
+      );
+      expect(transA, equals(PlaybackTransition.none));
+      expect(resolver.isCurrentlyPlaying, isTrue);
+
+      // Config lost, but isMusicActive is true
+      final transB = resolver.resolve(
+        hasMediaConfig: false,
+        isMusicActive: true,
+        isA2dpStreaming: false,
+      );
+      expect(transB, equals(PlaybackTransition.none));
+      expect(resolver.isCurrentlyPlaying, isTrue);
+    });
+
+    test('Resolution reasons are correctly formatted', () {
+      expect(resolver.getResolutionReason(hasMediaConfig: true, isMusicActive: true, isA2dpStreaming: true),
+          equals('active_media_configuration'));
+      expect(resolver.getResolutionReason(hasMediaConfig: false, isMusicActive: false, isA2dpStreaming: true),
+          equals('bluetooth_a2dp_streaming'));
+      expect(resolver.getResolutionReason(hasMediaConfig: false, isMusicActive: true, isA2dpStreaming: false),
+          equals('audio_manager_music_active'));
+      expect(resolver.getResolutionReason(hasMediaConfig: false, isMusicActive: false, isA2dpStreaming: false),
+          equals('no_active_media_or_sound'));
     });
   });
 }
