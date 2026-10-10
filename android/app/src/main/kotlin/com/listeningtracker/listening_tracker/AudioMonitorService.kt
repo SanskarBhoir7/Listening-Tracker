@@ -36,6 +36,7 @@ class AudioMonitorService : Service() {
     }
 
     private var activeDeviceName: String? = null
+    private var isForegroundActive = false
 
     override fun onCreate() {
         super.onCreate()
@@ -46,7 +47,7 @@ class AudioMonitorService : Service() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         val action = intent?.action
-        Log.d(TAG, "Service onStartCommand: action=$action")
+        Log.d(TAG, "Service onStartCommand: action=$action, startId=$startId")
         NativeLifecycleDiagnostics.record(this, "SERVICE_START_COMMAND", mapOf(
             "action" to (action ?: "sticky_restart_null_intent"),
             "startId" to startId,
@@ -54,6 +55,7 @@ class AudioMonitorService : Service() {
 
         if (action == ACTION_STOP_MONITORING) {
             Log.d(TAG, "Handling ACTION_STOP_MONITORING: stopping foreground service")
+            isForegroundActive = false
             stopForeground(STOP_FOREGROUND_REMOVE)
             stopSelf()
             return START_NOT_STICKY
@@ -65,6 +67,23 @@ class AudioMonitorService : Service() {
         }
 
         val notification = buildNotification(activeDeviceName)
+
+        // If the service is already in foreground, update notification and ensure monitoring is active
+        // without redundant startForeground promotion calls or diagnostic events.
+        if (isForegroundActive) {
+            val notificationManager = getSystemService(NotificationManager::class.java)
+            notificationManager?.notify(NOTIFICATION_ID, notification)
+            try {
+                val engine = AudioMonitorBridge.getOrCreateMonitorEngine(applicationContext)
+                monitorEngine = engine
+                if (!engine.isMonitoring) {
+                    engine.startMonitoring()
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "Error ensuring engine active on existing service", e)
+            }
+            return START_STICKY
+        }
 
         // Verify runtime prerequisites for connectedDevice FGS type (BLUETOOTH_CONNECT on API 31+)
         val hasBtConnect = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
@@ -120,6 +139,7 @@ class AudioMonitorService : Service() {
             stopSelf(startId)
             return START_NOT_STICKY
         }
+        isForegroundActive = true
         NativeLifecycleDiagnostics.record(this, "FOREGROUND_PROMOTION_SUCCEEDED", mapOf("fgsType" to if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) "connectedDevice|specialUse" else "specialUse"))
 
         // Initialize and wire FlutterEngine and AudioMonitorEngine via AudioMonitorBridge
@@ -154,6 +174,7 @@ class AudioMonitorService : Service() {
 
     override fun onDestroy() {
         Log.d(TAG, "AudioMonitorService destroyed")
+        isForegroundActive = false
         NativeLifecycleDiagnostics.record(this, "SERVICE_DESTROYED")
         AudioMonitorBridge.notifyMonitoringState(this, false, "service_destroyed")
         monitorEngine?.stopMonitoring()

@@ -236,10 +236,25 @@ object AudioMonitorBridge {
             })
     }
 
+    private var lastConnectedAddress: String? = null
+    private var lastConnectedTimestamp: Long = 0L
+
     fun handleBluetoothConnected(context: Context, deviceName: String, deviceAddress: String) {
-        Log.d(TAG, "handleBluetoothConnected: device=$deviceName, address=$deviceAddress")
+        val now = System.currentTimeMillis()
+        val isRecentDuplicate = deviceAddress.isNotBlank() &&
+            deviceAddress.equals(lastConnectedAddress, ignoreCase = true) &&
+            (now - lastConnectedTimestamp < 2500L)
+
+        lastConnectedAddress = deviceAddress
+        lastConnectedTimestamp = now
+
+        Log.d(TAG, "handleBluetoothConnected: device=$deviceName, address=$deviceAddress, isRecentDuplicate=$isRecentDuplicate")
         val appContext = context.applicationContext
-        NativeLifecycleDiagnostics.record(appContext, "BLUETOOTH_CONNECTION_HANDLED", mapOf("deviceName" to deviceName, "addressPresent" to deviceAddress.isNotBlank()))
+        NativeLifecycleDiagnostics.record(appContext, "BLUETOOTH_CONNECTION_HANDLED", mapOf(
+            "deviceName" to deviceName,
+            "addressPresent" to deviceAddress.isNotBlank(),
+            "isDuplicate" to isRecentDuplicate,
+        ))
 
         // Dismiss any existing fallback alert notification
         dismissFallbackNotification(appContext)
@@ -250,21 +265,23 @@ object AudioMonitorBridge {
         // 2. Ensure FlutterEngine is active so SessionEngine processes events
         ensureFlutterEngine(appContext)
 
-        // 3. Start foreground service
-        val serviceIntent = Intent(appContext, AudioMonitorService::class.java).apply {
-            action = AudioMonitorService.ACTION_START_MONITORING
-            putExtra(AudioMonitorService.EXTRA_DEVICE_NAME, deviceName)
-            putExtra(AudioMonitorService.EXTRA_DEVICE_ADDRESS, deviceAddress)
-        }
+        // 3. Start foreground service (only if not already active or recently initiated for this device)
+        if (!isRecentDuplicate && !engine.isMonitoring) {
+            val serviceIntent = Intent(appContext, AudioMonitorService::class.java).apply {
+                action = AudioMonitorService.ACTION_START_MONITORING
+                putExtra(AudioMonitorService.EXTRA_DEVICE_NAME, deviceName)
+                putExtra(AudioMonitorService.EXTRA_DEVICE_ADDRESS, deviceAddress)
+            }
 
-        try {
-            ContextCompat.startForegroundService(appContext, serviceIntent)
-            Log.i(TAG, "startForegroundService initiated successfully from Bluetooth event")
-            NativeLifecycleDiagnostics.record(appContext, "SERVICE_START_REQUEST_ACCEPTED", mapOf("origin" to "bluetooth"))
-        } catch (e: Exception) {
-            Log.w(TAG, "Unable to start foreground service directly from background (${e.javaClass.simpleName}): ${e.message}")
-            NativeLifecycleDiagnostics.record(appContext, "SERVICE_START_REQUEST_REJECTED", mapOf("origin" to "bluetooth", "error" to e.javaClass.name, "message" to (e.message ?: "")))
-            showConnectionFallbackNotification(appContext, deviceName, deviceAddress)
+            try {
+                ContextCompat.startForegroundService(appContext, serviceIntent)
+                Log.i(TAG, "startForegroundService initiated successfully from Bluetooth event")
+                NativeLifecycleDiagnostics.record(appContext, "SERVICE_START_REQUEST_ACCEPTED", mapOf("origin" to "bluetooth"))
+            } catch (e: Exception) {
+                Log.w(TAG, "Unable to start foreground service directly from background (${e.javaClass.simpleName}): ${e.message}")
+                NativeLifecycleDiagnostics.record(appContext, "SERVICE_START_REQUEST_REJECTED", mapOf("origin" to "bluetooth", "error" to e.javaClass.name, "message" to (e.message ?: "")))
+                showConnectionFallbackNotification(appContext, deviceName, deviceAddress)
+            }
         }
 
         // 4. Update engine device state
@@ -274,6 +291,9 @@ object AudioMonitorBridge {
     fun handleBluetoothDisconnected(context: Context, deviceName: String, deviceAddress: String) {
         Log.d(TAG, "handleBluetoothDisconnected: device=$deviceName, address=$deviceAddress")
         val appContext = context.applicationContext
+
+        lastConnectedAddress = null
+        lastConnectedTimestamp = 0L
 
         dismissFallbackNotification(appContext)
 
@@ -305,6 +325,17 @@ object AudioMonitorBridge {
         dismissFallbackNotification(appContext)
         val engine = getOrCreateMonitorEngine(appContext)
         ensureFlutterEngine(appContext)
+
+        if (engine.isMonitoring) {
+            Log.d(TAG, "Audio monitoring already active; skipping redundant service start request")
+            return true
+        }
+
+        val now = System.currentTimeMillis()
+        if (now - lastConnectedTimestamp < 1500L) {
+            Log.d(TAG, "Service start already in progress for recent connection event; skipping duplicate start")
+            return true
+        }
 
         val serviceIntent = Intent(appContext, AudioMonitorService::class.java).apply {
             action = AudioMonitorService.ACTION_START_MONITORING

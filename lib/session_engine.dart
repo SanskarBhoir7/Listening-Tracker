@@ -48,9 +48,14 @@ class SessionEngine {
   ListeningSession? _currentDeviceSession;
   ContinuousListeningSession? _currentContinuousSession;
 
+  // Wall-Clock Playback & Silent Segment Tracking
+  DateTime? _currentAudioSegmentStartedAt;
+  int _accumulatedActiveListeningSeconds = 0;
+  DateTime? _currentSilentSegmentStartedAt;
+  int _accumulatedSilentSeconds = 0;
+
   // Timers & Token Protection
   Timer? _tickerTimer;
-  DateTime? _lastTickAt;
   Timer? _gracePeriodTimer;
   DateTime? _gracePeriodStartedAt;
   int _graceTimerToken = 0;
@@ -93,43 +98,57 @@ class SessionEngine {
   List<ListeningSession> get recentDeviceSessions => _recentDeviceSessions;
   DailyStats get todayStats => _todayStats;
 
-  /// Live formatted session durations
+  /// Live formatted session durations computed from wall-clock timestamps
   String get liveActiveListeningFormatted {
     if (_currentDeviceSession != null) {
-      return ListeningSession.formatClock(
-        _currentDeviceSession!.activeListeningDurationSeconds,
-      );
+      final currentActive = _accumulatedActiveListeningSeconds +
+          (_currentAudioSegmentStartedAt != null
+              ? DateTime.now()
+                  .difference(_currentAudioSegmentStartedAt!)
+                  .inSeconds
+              : 0);
+      return ListeningSession.formatClock(currentActive);
     }
     return '00:00:00';
   }
 
   String get liveConnectedFormatted {
     if (_activeConnectionRecord != null) {
-      return ConnectionRecord.formatClock(
-        _activeConnectionRecord!.durationSeconds,
-      );
+      final currentConnected = DateTime.now()
+          .difference(_activeConnectionRecord!.connectedAt)
+          .inSeconds;
+      return ConnectionRecord.formatClock(currentConnected);
     } else if (_currentDeviceSession != null) {
-      return ListeningSession.formatClock(
-        _currentDeviceSession!.connectedDurationSeconds,
-      );
+      final currentConnected = DateTime.now()
+          .difference(_currentDeviceSession!.connectedAt)
+          .inSeconds;
+      return ListeningSession.formatClock(currentConnected);
     }
     return '00:00:00';
   }
 
   String get liveSilentFormatted {
     if (_currentDeviceSession != null) {
-      return ListeningSession.formatClock(
-        _currentDeviceSession!.silentDurationSeconds,
-      );
+      final currentSilent = _accumulatedSilentSeconds +
+          (_currentSilentSegmentStartedAt != null
+              ? DateTime.now()
+                  .difference(_currentSilentSegmentStartedAt!)
+                  .inSeconds
+              : 0);
+      return ListeningSession.formatClock(currentSilent);
     }
     return '00:00:00';
   }
 
   String get liveContinuousFormatted {
     if (_currentContinuousSession != null) {
-      return ListeningSession.formatClock(
-        _currentContinuousSession!.activeListeningDurationSeconds,
-      );
+      final currentActive = _accumulatedActiveListeningSeconds +
+          (_currentAudioSegmentStartedAt != null
+              ? DateTime.now()
+                  .difference(_currentAudioSegmentStartedAt!)
+                  .inSeconds
+              : 0);
+      return ListeningSession.formatClock(currentActive);
     }
     return '00:00:00';
   }
@@ -182,6 +201,11 @@ class SessionEngine {
     if (continuousToClose != null) {
       await _closeContinuousSession(continuousToClose, now);
     }
+
+    _currentAudioSegmentStartedAt = null;
+    _currentSilentSegmentStartedAt = null;
+    _accumulatedActiveListeningSeconds = 0;
+    _accumulatedSilentSeconds = 0;
 
     _connectedDevices.clear();
     _activeOutputDevice = null;
@@ -291,10 +315,18 @@ class SessionEngine {
             await _closeDeviceSession(prevSession, now);
           }
           await _startListeningSession(device, now);
+        } else {
+          _currentAudioSegmentStartedAt ??= now;
         }
       } else {
         // Not playing: if we were not already in a valid grace period for this device, stay idle
         if (_sessionState == ListeningSessionState.active) {
+          if (_currentAudioSegmentStartedAt != null) {
+            _accumulatedActiveListeningSeconds +=
+                now.difference(_currentAudioSegmentStartedAt!).inSeconds;
+            _currentAudioSegmentStartedAt = null;
+          }
+          _currentSilentSegmentStartedAt = now;
           _sessionState = ListeningSessionState.gracePeriod;
           _startGracePeriod();
         }
@@ -523,6 +555,14 @@ class SessionEngine {
             // GRACE_PERIOD -> ACTIVE: Resume the SAME session!
             _cancelGracePeriod();
             _sessionState = ListeningSessionState.active;
+
+            if (_currentSilentSegmentStartedAt != null) {
+              _accumulatedSilentSeconds +=
+                  now.difference(_currentSilentSegmentStartedAt!).inSeconds;
+              _currentSilentSegmentStartedAt = null;
+            }
+            _currentAudioSegmentStartedAt ??= now;
+
             _emitTrackingEvent(
               eventType: 'LISTENING_RESUMED',
               reason: 'Audio resumed within grace period',
@@ -530,6 +570,12 @@ class SessionEngine {
           } else if (_sessionState == ListeningSessionState.active) {
             // Invariant 11: Ignore duplicate AUDIO_STARTED when already active
             _cancelGracePeriod();
+            if (_currentSilentSegmentStartedAt != null) {
+              _accumulatedSilentSeconds +=
+                  now.difference(_currentSilentSegmentStartedAt!).inSeconds;
+              _currentSilentSegmentStartedAt = null;
+            }
+            _currentAudioSegmentStartedAt ??= now;
           }
         }
         break;
@@ -537,6 +583,13 @@ class SessionEngine {
       case 'AUDIO_STOPPED':
         _audioState = AudioPlaybackState.notPlaying;
         _emitTrackingEvent(eventType: 'AUDIO_STOPPED');
+
+        if (_currentAudioSegmentStartedAt != null) {
+          _accumulatedActiveListeningSeconds +=
+              now.difference(_currentAudioSegmentStartedAt!).inSeconds;
+          _currentAudioSegmentStartedAt = null;
+        }
+        _currentSilentSegmentStartedAt ??= now;
 
         // ACTIVE -> GRACE_PERIOD: Grace period applies ONLY when audio stops while connected
         if (_connectionState == BluetoothConnectionState.connected &&
@@ -690,16 +743,25 @@ class SessionEngine {
   Future<void> _startListeningSession(AudioDevice device, DateTime now) async {
     _cancelGracePeriod();
 
+    final connectedAt = _activeConnectionRecord?.connectedAt ?? now;
+    final initialSilenceSeconds =
+        now.difference(connectedAt).inSeconds.clamp(0, 86400);
+
+    _accumulatedActiveListeningSeconds = 0;
+    _currentAudioSegmentStartedAt = now;
+    _accumulatedSilentSeconds = initialSilenceSeconds;
+    _currentSilentSegmentStartedAt = null;
+
     _currentDeviceSession = ListeningSession(
       id: 'ds_${DateTime.now().microsecondsSinceEpoch}',
       deviceId: device.id,
       deviceName: device.name,
       deviceType: device.deviceType,
-      connectedAt: _activeConnectionRecord?.connectedAt ?? now,
+      connectedAt: connectedAt,
       listeningStartedAt: now,
-      connectedDurationSeconds: _activeConnectionRecord?.durationSeconds ?? 0,
+      connectedDurationSeconds: initialSilenceSeconds,
       activeListeningDurationSeconds: 0,
-      silentDurationSeconds: 0,
+      silentDurationSeconds: initialSilenceSeconds,
       status: 'active',
     );
 
@@ -743,11 +805,22 @@ class SessionEngine {
     ListeningSession session,
     DateTime now,
   ) async {
+    if (_currentAudioSegmentStartedAt != null) {
+      _accumulatedActiveListeningSeconds +=
+          now.difference(_currentAudioSegmentStartedAt!).inSeconds;
+      _currentAudioSegmentStartedAt = null;
+    }
+    if (_currentSilentSegmentStartedAt != null) {
+      _accumulatedSilentSeconds +=
+          now.difference(_currentSilentSegmentStartedAt!).inSeconds;
+      _currentSilentSegmentStartedAt = null;
+    }
+
     final totalConnected = now.difference(session.connectedAt).inSeconds;
-    final active = session.activeListeningDurationSeconds;
+    final active = _accumulatedActiveListeningSeconds;
     final silent = (totalConnected > active)
         ? (totalConnected - active)
-        : session.silentDurationSeconds;
+        : _accumulatedSilentSeconds;
 
     final completed = session.copyWith(
       disconnectedAt: now,
@@ -760,6 +833,9 @@ class SessionEngine {
       silentDurationSeconds: silent,
       status: 'completed',
     );
+
+    _accumulatedActiveListeningSeconds = 0;
+    _accumulatedSilentSeconds = 0;
 
     await _db.saveDeviceSession(completed);
     _emitTrackingEvent(
@@ -854,7 +930,6 @@ class SessionEngine {
 
   void _startTicker() {
     _tickerTimer?.cancel();
-    _lastTickAt = DateTime.now();
     _tickerTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
       _onTick();
     });
@@ -863,62 +938,60 @@ class SessionEngine {
   void _stopTicker() {
     _tickerTimer?.cancel();
     _tickerTimer = null;
-    _lastTickAt = null;
   }
 
-  void _onTick() {
-    final now = DateTime.now();
-    final previousTick =
-        _lastTickAt ?? now.subtract(const Duration(seconds: 1));
-    final elapsedSeconds = now
-        .difference(previousTick)
-        .inSeconds
-        .clamp(0, 86400);
-    _lastTickAt = now;
-    if (elapsedSeconds == 0) return;
+  void _onTick([DateTime? overrideNow]) {
+    final now = overrideNow ?? DateTime.now();
     bool stateChanged = false;
 
     // 1. Connection Duration: Increments whenever connected
     if (_activeConnectionRecord != null) {
-      _activeConnectionRecord = _activeConnectionRecord!.copyWith(
-        durationSeconds:
-            _activeConnectionRecord!.durationSeconds + elapsedSeconds,
-      );
-      stateChanged = true;
+      final totalConnected =
+          now.difference(_activeConnectionRecord!.connectedAt).inSeconds;
+      if (totalConnected != _activeConnectionRecord!.durationSeconds) {
+        _activeConnectionRecord = _activeConnectionRecord!.copyWith(
+          durationSeconds: totalConnected,
+        );
+        stateChanged = true;
+      }
     }
 
     // 2. Device Session Duration: Tracks listening vs silent
     if (_currentDeviceSession != null) {
-      final newConnected =
-          _currentDeviceSession!.connectedDurationSeconds + elapsedSeconds;
+      final totalConnected =
+          now.difference(_currentDeviceSession!.connectedAt).inSeconds;
+      final currentActive = _accumulatedActiveListeningSeconds +
+          (_currentAudioSegmentStartedAt != null
+              ? now.difference(_currentAudioSegmentStartedAt!).inSeconds
+              : 0);
+      final currentSilent = _accumulatedSilentSeconds +
+          (_currentSilentSegmentStartedAt != null
+              ? now.difference(_currentSilentSegmentStartedAt!).inSeconds
+              : 0);
+
       final previousActive =
           _currentDeviceSession!.activeListeningDurationSeconds;
-      int newActive = previousActive;
-      int newSilent = _currentDeviceSession!.silentDurationSeconds;
 
-      if (_sessionState == ListeningSessionState.active &&
-          _audioState == AudioPlaybackState.playing) {
-        newActive += elapsedSeconds;
-      } else {
-        newSilent += elapsedSeconds;
+      if (totalConnected != _currentDeviceSession!.connectedDurationSeconds ||
+          currentActive != _currentDeviceSession!.activeListeningDurationSeconds ||
+          currentSilent != _currentDeviceSession!.silentDurationSeconds) {
+        _currentDeviceSession = _currentDeviceSession!.copyWith(
+          connectedDurationSeconds: totalConnected,
+          activeListeningDurationSeconds: currentActive,
+          silentDurationSeconds: currentSilent,
+        );
+        stateChanged = true;
       }
 
-      _currentDeviceSession = _currentDeviceSession!.copyWith(
-        connectedDurationSeconds: newConnected,
-        activeListeningDurationSeconds: newActive,
-        silentDurationSeconds: newSilent,
-      );
-      stateChanged = true;
-
       // Periodic checkpoint every 60 seconds of active listening to avoid excessive writes
-      if (newActive > 0 &&
-          newActive ~/ 60 > previousActive ~/ 60 &&
+      if (currentActive > 0 &&
+          currentActive ~/ 60 > previousActive ~/ 60 &&
           _sessionState == ListeningSessionState.active) {
         _emitTrackingEvent(
           eventType: 'SESSION_CHECKPOINT',
           deviceId: _currentDeviceSession!.deviceId,
           deviceName: _currentDeviceSession!.deviceName,
-          durationSeconds: newActive,
+          durationSeconds: currentActive,
           reason: 'Active listening checkpoint after elapsed timer delay',
         );
       }
@@ -926,20 +999,22 @@ class SessionEngine {
 
     // 3. Continuous Session Duration
     if (_currentContinuousSession != null) {
-      if (_sessionState == ListeningSessionState.active &&
-          _audioState == AudioPlaybackState.playing) {
-        final newActive =
-            _currentContinuousSession!.activeListeningDurationSeconds +
-            elapsedSeconds;
+      final currentActive = _accumulatedActiveListeningSeconds +
+          (_currentAudioSegmentStartedAt != null
+              ? now.difference(_currentAudioSegmentStartedAt!).inSeconds
+              : 0);
+      final currentPaused = _accumulatedSilentSeconds +
+          (_currentSilentSegmentStartedAt != null
+              ? now.difference(_currentSilentSegmentStartedAt!).inSeconds
+              : 0);
+
+      if (currentActive !=
+              _currentContinuousSession!.activeListeningDurationSeconds ||
+          currentPaused !=
+              _currentContinuousSession!.pausedDurationSeconds) {
         _currentContinuousSession = _currentContinuousSession!.copyWith(
-          activeListeningDurationSeconds: newActive,
-        );
-        stateChanged = true;
-      } else if (_sessionState == ListeningSessionState.gracePeriod) {
-        final newPaused =
-            _currentContinuousSession!.pausedDurationSeconds + elapsedSeconds;
-        _currentContinuousSession = _currentContinuousSession!.copyWith(
-          pausedDurationSeconds: newPaused,
+          activeListeningDurationSeconds: currentActive,
+          pausedDurationSeconds: currentPaused,
         );
         stateChanged = true;
       }
@@ -948,6 +1023,12 @@ class SessionEngine {
     if (stateChanged) {
       onStateChanged?.call();
     }
+  }
+
+  /// Exposed for testing to simulate timer ticks deterministically
+  @visibleForTesting
+  void triggerTickForTesting([DateTime? now]) {
+    _onTick(now);
   }
 
   // =========================================================================

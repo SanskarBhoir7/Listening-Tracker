@@ -444,6 +444,110 @@ void main() {
 
     testEngine.dispose();
   });
+
+  // =========================================================================
+  // SILENT DURATION & SEGMENT TIMING REGRESSION TESTS
+  // =========================================================================
+
+  test('SILENT DURATION AUDIT: Connection preceding listening reflects idle time in both Live Monitor and History', () async {
+    // Earbuds connect at T0
+    await engine.handleNativeEvent(btConnectEvent());
+    expect(engine.connectionState, equals(BluetoothConnectionState.connected));
+    expect(engine.sessionState, equals(ListeningSessionState.idle));
+
+    // Simulate 2 seconds of connection idle before music starts
+    await Future.delayed(const Duration(milliseconds: 1100));
+
+    // Music starts at T0 + 1.1s
+    await engine.handleNativeEvent(audioStartEvent());
+    expect(engine.sessionState, equals(ListeningSessionState.active));
+    expect(engine.currentDeviceSession, isNotNull);
+
+    // Initial silent duration must reflect the idle connection time before playback started
+    expect(engine.currentDeviceSession!.silentDurationSeconds, greaterThanOrEqualTo(1));
+    expect(engine.currentDeviceSession!.activeListeningDurationSeconds, equals(0));
+
+    // Live monitor getter displays the silent duration immediately (not 00:00:00)
+    expect(engine.liveSilentFormatted, isNot(equals('00:00:00')));
+
+    // Disconnect after another brief playback interval
+    await Future.delayed(const Duration(milliseconds: 1100));
+    await engine.handleNativeEvent(btDisconnectEvent());
+
+    final finalized = db.deviceSessions.first;
+    expect(finalized.activeListeningDurationSeconds, greaterThanOrEqualTo(1));
+    expect(finalized.silentDurationSeconds, greaterThanOrEqualTo(1));
+    expect(finalized.connectedDurationSeconds,
+        equals(finalized.activeListeningDurationSeconds + finalized.silentDurationSeconds));
+  });
+
+  test('SILENT DURATION AUDIT: Continuous playback with delayed/jittered timer ticks does not lose active time to silent time', () async {
+    await engine.handleNativeEvent(btConnectEvent());
+    await engine.handleNativeEvent(audioStartEvent());
+
+    // Playback for 1.2s without stopping
+    await Future.delayed(const Duration(milliseconds: 1200));
+
+    // Disconnect directly
+    await engine.handleNativeEvent(btDisconnectEvent());
+
+    final finalized = db.deviceSessions.first;
+    expect(finalized.activeListeningDurationSeconds, greaterThanOrEqualTo(1));
+    // Continuous playback without pauses must have zero or minimal silent seconds (not minutes)
+    expect(finalized.silentDurationSeconds, lessThanOrEqualTo(1));
+  });
+
+  test('SILENT DURATION AUDIT: Genuine pause while connected accumulates into silent duration without losing active duration', () async {
+    await engine.handleNativeEvent(btConnectEvent());
+    await engine.handleNativeEvent(audioStartEvent());
+
+    // 1 second of active playback
+    await Future.delayed(const Duration(milliseconds: 1100));
+
+    // Audio stops (entering grace period)
+    await engine.handleNativeEvent(audioStopEvent());
+    expect(engine.sessionState, equals(ListeningSessionState.gracePeriod));
+
+    // 1 second of silence while connected
+    await Future.delayed(const Duration(milliseconds: 1100));
+
+    // Disconnect while in grace period
+    await engine.handleNativeEvent(btDisconnectEvent());
+
+    final finalized = db.deviceSessions.first;
+    expect(finalized.activeListeningDurationSeconds, greaterThanOrEqualTo(1));
+    expect(finalized.silentDurationSeconds, greaterThanOrEqualTo(1));
+    expect(finalized.connectedDurationSeconds,
+        greaterThanOrEqualTo(finalized.activeListeningDurationSeconds + finalized.silentDurationSeconds));
+  });
+
+  test('SILENT DURATION AUDIT: Listening and connection durations nearly identical before disconnect does not produce phantom silent duration', () async {
+    await engine.handleNativeEvent(btConnectEvent());
+    await engine.handleNativeEvent(audioStartEvent());
+
+    // Music plays continuously
+    await Future.delayed(const Duration(milliseconds: 1100));
+
+    await engine.handleNativeEvent(btDisconnectEvent());
+
+    final finalized = db.deviceSessions.first;
+    // Active and connected should be virtually identical, silent duration strictly close to 0
+    expect(finalized.silentDurationSeconds, lessThanOrEqualTo(1));
+    expect((finalized.connectedDurationSeconds - finalized.activeListeningDurationSeconds).abs(), lessThanOrEqualTo(1));
+  });
+
+  test('SILENT DURATION AUDIT: Disconnect while listening finalizes immediately without grace period', () async {
+    await engine.handleNativeEvent(btConnectEvent());
+    await engine.handleNativeEvent(audioStartEvent());
+    expect(engine.sessionState, equals(ListeningSessionState.active));
+
+    await engine.handleNativeEvent(btDisconnectEvent());
+
+    expect(engine.sessionState, equals(ListeningSessionState.idle));
+    expect(engine.isInGracePeriod, isFalse);
+    expect(engine.gracePeriodRemaining, isNull);
+    expect(db.deviceSessions.first.status, equals('completed'));
+  });
 }
 
 class HookedDatabaseAdapter extends InMemoryDatabaseAdapter {
