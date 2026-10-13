@@ -855,7 +855,7 @@ class _MonitorDashboardState extends State<MonitorDashboard>
                         color: color,
                         size: 18,
                       ),
-                      const SizedBox(width: 8),
+                      const SizedBox(width: 6),
                       const Flexible(
                         child: FittedBox(
                           fit: BoxFit.scaleDown,
@@ -869,87 +869,86 @@ class _MonitorDashboardState extends State<MonitorDashboard>
                           ),
                         ),
                       ),
-                    ],
-                  ),
-                ),
-                const SizedBox(width: 8),
-                Flexible(
-                  child: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    mainAxisAlignment: MainAxisAlignment.end,
-                    children: [
-                      if (breakState.isSimulated) ...[
-                        FittedBox(
-                          fit: BoxFit.scaleDown,
-                          child: Container(
-                            padding: const EdgeInsets.symmetric(
-                              horizontal: 6,
-                              vertical: 2,
-                            ),
-                            decoration: BoxDecoration(
-                              color: Colors.purple.shade900.withValues(alpha: 0.6),
-                              borderRadius: BorderRadius.circular(4),
-                              border: Border.all(
-                                color: Colors.purpleAccent,
-                                width: 0.8,
-                              ),
-                            ),
-                            child: const Text(
-                              'SIMULATED',
-                              style: TextStyle(
-                                fontSize: 9,
-                                fontWeight: FontWeight.bold,
-                                color: Colors.purpleAccent,
-                                letterSpacing: 0.6,
-                              ),
-                            ),
-                          ),
-                        ),
-                        const SizedBox(width: 6),
-                      ],
-                      Flexible(
-                        child: FittedBox(
-                          fit: BoxFit.scaleDown,
-                          child: Container(
-                            padding: const EdgeInsets.symmetric(
-                              horizontal: 8,
-                              vertical: 3,
-                            ),
-                            decoration: BoxDecoration(
-                              color: color.withValues(alpha: 0.15),
-                              borderRadius: BorderRadius.circular(6),
-                              border: Border.all(color: color.withValues(alpha: 0.5)),
-                            ),
-                            child: Text(
-                              breakState.statusLabel,
-                              style: TextStyle(
-                                fontSize: 11,
-                                fontWeight: FontWeight.bold,
-                                color: color,
-                                letterSpacing: 0.8,
-                              ),
-                            ),
-                          ),
-                        ),
-                      ),
-                      const SizedBox(width: 4),
+                      const SizedBox(width: 2),
                       IconButton(
-                        key: const Key('card_break_settings_button'),
-                        icon: const Icon(Icons.settings_outlined, size: 16),
-                        color: Colors.grey.shade400,
-                        padding: EdgeInsets.zero,
-                        constraints: const BoxConstraints(minWidth: 28, minHeight: 28),
-                        tooltip: 'Configure break reminders',
+                        key: const Key('break_engine_settings_icon_button'),
+                        icon: const Icon(Icons.settings, size: 18),
+                        color: Colors.tealAccent,
+                        padding: const EdgeInsets.all(2),
+                        constraints: const BoxConstraints(
+                          minWidth: 28,
+                          minHeight: 28,
+                        ),
+                        tooltip: 'Break reminder settings',
                         onPressed: () {
                           Navigator.of(context).push(
                             MaterialPageRoute(
-                              builder: (_) => BreakSettingsView(sessionEngine: _engine),
+                              builder: (_) =>
+                                  BreakSettingsView(sessionEngine: _engine),
                             ),
                           );
                         },
                       ),
                     ],
                   ),
+                ),
+                const SizedBox(width: 6),
+                Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    if (breakState.isSimulated) ...[
+                      FittedBox(
+                        fit: BoxFit.scaleDown,
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 6,
+                            vertical: 2,
+                          ),
+                          decoration: BoxDecoration(
+                            color: Colors.purple.shade900.withValues(alpha: 0.6),
+                            borderRadius: BorderRadius.circular(4),
+                            border: Border.all(
+                              color: Colors.purpleAccent,
+                              width: 0.8,
+                            ),
+                          ),
+                          child: const Text(
+                            'SIMULATED',
+                            style: TextStyle(
+                              fontSize: 9,
+                              fontWeight: FontWeight.bold,
+                              color: Colors.purpleAccent,
+                              letterSpacing: 0.6,
+                            ),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 6),
+                    ],
+                    FittedBox(
+                      fit: BoxFit.scaleDown,
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 8,
+                          vertical: 3,
+                        ),
+                        decoration: BoxDecoration(
+                          color: color.withValues(alpha: 0.15),
+                          borderRadius: BorderRadius.circular(6),
+                          border: Border.all(color: color.withValues(alpha: 0.5)),
+                        ),
+                        child: Text(
+                          breakState.statusLabel,
+                          style: TextStyle(
+                            fontSize: 11,
+                            fontWeight: FontWeight.bold,
+                            color: color,
+                            letterSpacing: 0.8,
+                          ),
+                        ),
+                      ),
+                    ),
+                  ],
                 ),
               ],
             ),
@@ -1259,10 +1258,10 @@ class _MonitorDashboardState extends State<MonitorDashboard>
                         OutlinedButton(
                           key: const Key('btn_reset_simulation'),
                           onPressed: breakState.isSimulated
-                              ? () {
-                                  _engine.debugResetSimulatedListening();
-                                }
-                              : null,
+                            ? () {
+                                _engine.debugResetSimulatedListening();
+                              }
+                            : null,
                           style: OutlinedButton.styleFrom(
                             visualDensity: VisualDensity.compact,
                             side: BorderSide(
@@ -1290,6 +1289,38 @@ class _MonitorDashboardState extends State<MonitorDashboard>
                 ),
               ),
             ],
+            const SizedBox(height: 12),
+            SizedBox(
+              width: double.infinity,
+              child: ElevatedButton.icon(
+                key: const Key('card_break_settings_button'),
+                icon: const Icon(Icons.tune, size: 16, color: Colors.black),
+                label: const Text(
+                  'Break Settings',
+                  style: TextStyle(
+                    color: Colors.black,
+                    fontWeight: FontWeight.bold,
+                    fontSize: 13,
+                    letterSpacing: 0.8,
+                  ),
+                ),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: Colors.tealAccent,
+                  foregroundColor: Colors.black,
+                  padding: const EdgeInsets.symmetric(vertical: 10),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                ),
+                onPressed: () {
+                  Navigator.of(context).push(
+                    MaterialPageRoute(
+                      builder: (_) => BreakSettingsView(sessionEngine: _engine),
+                    ),
+                  );
+                },
+              ),
+            ),
           ],
         ),
       ),

@@ -6,6 +6,7 @@ import 'package:listening_tracker/models/break_reminder_settings.dart';
 import 'package:listening_tracker/models/break_state.dart';
 import 'package:listening_tracker/services/break_engine.dart';
 import 'package:listening_tracker/services/break_notification_service.dart';
+import 'package:listening_tracker/main.dart';
 import 'package:listening_tracker/session_engine.dart';
 import 'package:listening_tracker/views/break_settings_view.dart';
 
@@ -489,6 +490,80 @@ void main() {
       final saved = await sessionEngine.getBreakReminderSettings();
       expect(saved.enabled, isFalse);
       expect(sessionEngine.breakEngine.config.enabled, isFalse);
+    });
+  });
+
+  group('Live Monitor Dashboard -> Break Settings Navigation Widget Tests', () {
+    late InMemoryDatabaseAdapter db;
+    late FakeBreakNotificationService notificationService;
+    late BreakEngine breakEngine;
+    late SessionEngine engine;
+
+    setUp(() {
+      db = InMemoryDatabaseAdapter();
+      notificationService = FakeBreakNotificationService();
+      breakEngine = BreakEngine(notificationService: notificationService);
+      engine = SessionEngine(database: db, breakEngine: breakEngine);
+    });
+
+    tearDown(() {
+      engine.dispose();
+    });
+
+    Widget buildTestApp() {
+      return MaterialApp(
+        theme: ThemeData.dark(useMaterial3: true),
+        home: MonitorDashboard(engine: engine, database: db),
+      );
+    }
+
+    testWidgets('Break Engine card displays visible settings icon next to heading and opens settings screen', (tester) async {
+      await tester.pumpWidget(buildTestApp());
+      await tester.pumpAndSettle();
+
+      final headingSettingsIconFinder = find.byKey(const Key('break_engine_settings_icon_button'));
+      expect(headingSettingsIconFinder, findsOneWidget);
+
+      await tester.tap(headingSettingsIconFinder);
+      await tester.pumpAndSettle();
+
+      expect(find.text('Break Reminder Settings'), findsOneWidget);
+      expect(find.byKey(const Key('break_reminder_enable_switch')), findsOneWidget);
+      expect(find.byKey(const Key('interval_chip_45')), findsOneWidget);
+    });
+
+    testWidgets('Break Engine card displays visible Break Settings button and opens settings screen', (tester) async {
+      await tester.pumpWidget(buildTestApp());
+      await tester.pumpAndSettle();
+
+      final cardButtonFinder = find.byKey(const Key('card_break_settings_button'));
+      expect(cardButtonFinder, findsOneWidget);
+      expect(find.text('Break Settings'), findsOneWidget);
+
+      await tester.ensureVisible(cardButtonFinder);
+      await tester.pumpAndSettle();
+
+      await tester.tap(cardButtonFinder);
+      await tester.pumpAndSettle();
+
+      expect(find.text('Break Reminder Settings'), findsOneWidget);
+      expect(find.byKey(const Key('interval_chip_30')), findsOneWidget);
+    });
+
+    testWidgets('Break Settings button is rendered directly below debug simulation section in Live Monitor', (tester) async {
+      await tester.pumpWidget(buildTestApp());
+      await tester.pumpAndSettle();
+
+      final debugSimHeaderFinder = find.text('DEBUG TEST SIMULATION');
+      expect(debugSimHeaderFinder, findsOneWidget);
+
+      final cardButtonFinder = find.byKey(const Key('card_break_settings_button'));
+      expect(cardButtonFinder, findsOneWidget);
+
+      // Verify button is positioned below the debug simulation section
+      final debugSimTop = tester.getTopLeft(debugSimHeaderFinder).dy;
+      final buttonTop = tester.getTopLeft(cardButtonFinder).dy;
+      expect(buttonTop, greaterThan(debugSimTop));
     });
   });
 }
