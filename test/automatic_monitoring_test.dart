@@ -6,6 +6,8 @@ import 'package:listening_tracker/audio_monitor_service.dart';
 import 'package:listening_tracker/database/database_adapter.dart';
 import 'package:listening_tracker/main.dart';
 import 'package:listening_tracker/session_engine.dart';
+import 'package:listening_tracker/services/break_engine.dart';
+import 'package:listening_tracker/services/break_notification_service.dart';
 import 'package:listening_tracker/tracking_state.dart';
 
 class FakeAudioMonitorService implements AudioMonitorService {
@@ -101,6 +103,20 @@ class FakeAudioMonitorService implements AudioMonitorService {
   @override
   Future<bool> shareLogFile(String content, String fileName) async => true;
 
+  @override
+  Future<bool> showBreakNotification({
+    required int id,
+    required String title,
+    required String body,
+    int snoozeMinutes = 10,
+  }) async => true;
+
+  @override
+  Future<bool> cancelBreakNotification(int id) async => true;
+
+  @override
+  Future<bool> cancelAllBreakNotifications() async => true;
+
   void emitEvent(Map<String, dynamic> event) {
     if (event['type'] == 'DEVICE_CONNECTED') {
       emitRawEvent({
@@ -130,7 +146,12 @@ void main() {
 
     setUp(() {
       db = InMemoryDatabaseAdapter();
-      engine = SessionEngine(database: db);
+      engine = SessionEngine(
+        database: db,
+        breakEngine: BreakEngine(
+          notificationService: FakeBreakNotificationService(),
+        ),
+      );
       fakeService = FakeAudioMonitorService();
     });
 
@@ -194,7 +215,8 @@ void main() {
           'deviceType': 'Bluetooth A2DP',
           'timestamp': DateTime.now().millisecondsSinceEpoch,
         });
-        await tester.pumpAndSettle();
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 50));
 
         expect(engine.isMonitoring, isFalse);
         expect(find.text('CONNECTED (Monitoring Inactive)'), findsOneWidget);
@@ -206,11 +228,13 @@ void main() {
           'reason': 'service_started',
           'timestamp': DateTime.now().millisecondsSinceEpoch,
         });
-        await tester.pumpAndSettle();
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 50));
 
         expect(engine.isMonitoring, isTrue);
         expect(find.text('CONNECTED (Idle / Silent)'), findsOneWidget);
         await engine.stopMonitoring();
+        await tester.pump();
       },
     );
 
@@ -705,6 +729,228 @@ void main() {
 
         expect(engine.sessionState, equals(ListeningSessionState.active));
         expect(find.text('LISTENING (Active)'), findsOneWidget);
+
+        await engine.stopMonitoring();
+        await tester.pumpAndSettle();
+      },
+    );
+
+    testWidgets(
+      'Lifecycle event drain handles SERVICE_START_REQUEST_REJECTED and RECOVERY_TRIGGERED_FROM_NOTIFICATION telemetry seamlessly',
+      (tester) async {
+        fakeService.nativeLifecycleEvents = [
+          {
+            'id': 'diag_rejected_1',
+            'timestamp': DateTime.now().millisecondsSinceEpoch - 5000,
+            'event_type': 'SERVICE_START_REQUEST_REJECTED',
+            'metadata': {
+              'origin': 'bluetooth_acl',
+              'startupPath': 'bluetooth_acl',
+              'error': 'android.app.ForegroundServiceStartNotAllowedException',
+              'message': 'startForegroundService() not allowed due to mAllowStartForeground false',
+              'isForegroundServiceStartNotAllowed': true,
+              'recoveryStrategy': 'direct_notification_action',
+            },
+          },
+          {
+            'id': 'diag_recovered_2',
+            'timestamp': DateTime.now().millisecondsSinceEpoch - 2000,
+            'event_type': 'RECOVERY_TRIGGERED_FROM_NOTIFICATION',
+            'metadata': {
+              'deviceName': 'realme Buds T200 Lite',
+              'startId': 2,
+            },
+          },
+        ];
+
+        await tester.pumpWidget(buildApp(service: fakeService));
+        await tester.pumpAndSettle();
+
+        // App launches and drains events without error
+        expect(find.byType(MaterialApp), findsOneWidget);
+
+        // Simulate incoming connected device state after successful recovery
+        fakeService.emitEvent({
+          'type': 'DEVICE_CONNECTED',
+          'deviceName': 'realme Buds T200 Lite',
+          'connectionType': 'bluetooth',
+          'deviceType': 'Bluetooth A2DP',
+          'timestamp': DateTime.now().millisecondsSinceEpoch,
+        });
+        await tester.pumpAndSettle();
+
+        expect(engine.isMonitoring, isTrue);
+        expect(engine.connectionState, equals(BluetoothConnectionState.connected));
+        expect(engine.sessionState, equals(ListeningSessionState.idle));
+
+        await engine.stopMonitoring();
+        await tester.pumpAndSettle();
+      },
+    );
+
+    testWidgets(
+      'Overlapping ACL and A2DP device connections do not produce duplicate active sessions and keep connection separate from audio playback',
+      (tester) async {
+        await tester.pumpWidget(buildApp(service: fakeService));
+        await tester.pumpAndSettle();
+
+        final now = DateTime.now().millisecondsSinceEpoch;
+
+        // 1. ACL connection arrives
+        fakeService.emitEvent({
+          'type': 'DEVICE_CONNECTED',
+          'deviceName': 'realme Buds T200 Lite',
+          'deviceAddress': '28:04:C6:D2:59:08',
+          'connectionType': 'bluetooth',
+          'deviceType': 'Bluetooth A2DP',
+          'timestamp': now,
+        });
+        await tester.pumpAndSettle();
+
+        // 2. Overlapping A2DP connection arrives 40ms later
+        fakeService.emitEvent({
+          'type': 'DEVICE_CONNECTED',
+          'deviceName': 'realme Buds T200 Lite',
+          'deviceAddress': '28:04:C6:D2:59:08',
+          'connectionType': 'bluetooth',
+          'deviceType': 'Bluetooth A2DP',
+          'timestamp': now + 40,
+        });
+        await tester.pumpAndSettle();
+
+        // Must have exactly one device tracked and in idle (not listening) state
+        expect(engine.connectedDevicesList.length, equals(1));
+        expect(engine.connectionState, equals(BluetoothConnectionState.connected));
+        expect(engine.sessionState, equals(ListeningSessionState.idle));
+        expect(find.text('CONNECTED (Idle / Silent)'), findsOneWidget);
+
+        // 3. Audio playback starts independently
+        fakeService.emitEvent({
+          'type': 'AUDIO_STARTED',
+          'deviceName': 'realme Buds T200 Lite',
+          'deviceAddress': '28:04:C6:D2:59:08',
+          'connectionType': 'bluetooth',
+          'deviceType': 'Bluetooth A2DP',
+          'timestamp': now + 1000,
+        });
+        await tester.pumpAndSettle();
+
+        expect(engine.sessionState, equals(ListeningSessionState.active));
+        expect(find.text('LISTENING (Active)'), findsOneWidget);
+
+        await engine.stopMonitoring();
+        await tester.pumpAndSettle();
+      },
+    );
+
+    testWidgets(
+      'Audio started before Flutter initialization is properly restored and drained without dropping events or double sessions',
+      (tester) async {
+        final now = DateTime.now().millisecondsSinceEpoch;
+        final preService = FakeAudioMonitorService(
+          stateToReturn: {
+            'isMonitoring': true,
+            'isAudioPlaying': true,
+            'outputDeviceName': 'realme Buds T200 Lite',
+            'outputDeviceType': 'Bluetooth A2DP',
+            'outputConnectionType': 'bluetooth',
+            'outputDeviceAddress': '28:04:C6:D2:59:08',
+            'connectedDevices': [
+              {
+                'name': 'realme Buds T200 Lite',
+                'typeName': 'Bluetooth A2DP',
+                'connectionType': 'bluetooth',
+                'address': '28:04:C6:D2:59:08',
+              }
+            ],
+          },
+        );
+
+        await tester.pumpWidget(buildApp(service: preService));
+        await tester.pumpAndSettle();
+
+        // 1. Initial snapshot recovery sees audio playing and activates session
+        expect(engine.isMonitoring, isTrue);
+        expect(engine.connectionState, equals(BluetoothConnectionState.connected));
+        expect(engine.sessionState, equals(ListeningSessionState.active));
+        expect(engine.currentDeviceSession, isNotNull);
+
+        // 2. Drained buffered events arrive from EventChannel
+        preService.emitEvent({
+          'type': 'DEVICE_CONNECTED',
+          'deviceName': 'realme Buds T200 Lite',
+          'deviceAddress': '28:04:C6:D2:59:08',
+          'connectionType': 'bluetooth',
+          'deviceType': 'Bluetooth A2DP',
+          'timestamp': now - 500,
+        });
+        preService.emitEvent({
+          'type': 'AUDIO_STARTED',
+          'deviceName': 'realme Buds T200 Lite',
+          'deviceAddress': '28:04:C6:D2:59:08',
+          'connectionType': 'bluetooth',
+          'deviceType': 'Bluetooth A2DP',
+          'isAudioPlaying': true,
+          'timestamp': now - 400,
+        });
+        await tester.pumpAndSettle();
+
+        // Must still be active with the same session, no duplicate creation
+        expect(engine.sessionState, equals(ListeningSessionState.active));
+        expect(engine.currentDeviceSession, isNotNull);
+
+        // Verify events in DiagnosticLogger
+        final eventsInDb = await db.getDiagnosticEvents();
+        final eventTypes = eventsInDb.map((e) => e.eventType).toList();
+        expect(eventTypes, contains('AUDIO_STARTED'));
+
+        await engine.stopMonitoring();
+        await tester.pumpAndSettle();
+      },
+    );
+
+    testWidgets(
+      'Connected-but-idle invariant: Bluetooth connection alone never counts as listening time or triggers session checkpoints',
+      (tester) async {
+        final idleService = FakeAudioMonitorService(
+          stateToReturn: {
+            'isMonitoring': true,
+            'isAudioPlaying': false,
+            'outputDeviceName': 'realme Buds T200 Lite',
+            'outputDeviceType': 'Bluetooth A2DP',
+            'outputConnectionType': 'bluetooth',
+            'outputDeviceAddress': '28:04:C6:D2:59:08',
+            'connectedDevices': [
+              {
+                'name': 'realme Buds T200 Lite',
+                'typeName': 'Bluetooth A2DP',
+                'connectionType': 'bluetooth',
+                'address': '28:04:C6:D2:59:08',
+              }
+            ],
+          },
+        );
+
+        await tester.pumpWidget(buildApp(service: idleService));
+        await tester.pumpAndSettle();
+
+        // Connected, but session MUST remain idle
+        expect(engine.isMonitoring, isTrue);
+        expect(engine.connectionState, equals(BluetoothConnectionState.connected));
+        expect(engine.sessionState, equals(ListeningSessionState.idle));
+        expect(engine.currentDeviceSession, isNull);
+        expect(find.text('CONNECTED (Idle / Silent)'), findsOneWidget);
+
+        // Advance 70 seconds to test periodic checkpoint interval
+        await tester.pump(const Duration(seconds: 70));
+
+        // Still idle, no listening session created
+        expect(engine.sessionState, equals(ListeningSessionState.idle));
+        expect(engine.currentDeviceSession, isNull);
+
+        final eventsInDb = await db.getDiagnosticEvents();
+        final checkpoints = eventsInDb.where((e) => e.eventType == 'SESSION_CHECKPOINT');
+        expect(checkpoints, isEmpty);
 
         await engine.stopMonitoring();
         await tester.pumpAndSettle();

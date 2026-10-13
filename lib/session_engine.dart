@@ -5,11 +5,14 @@ import 'package:flutter/foundation.dart';
 import 'database/database_adapter.dart';
 import 'database/database_helper.dart';
 import 'models/audio_device.dart';
+import 'models/break_reminder_settings.dart';
+import 'models/break_state.dart';
 import 'models/connection_record.dart';
 import 'models/continuous_session.dart';
 import 'models/daily_stats.dart';
 import 'models/listening_session.dart';
 import 'models/tracking_event.dart';
+import 'services/break_engine.dart';
 import 'services/diagnostic_logger.dart';
 import 'tracking_state.dart';
 
@@ -18,17 +21,24 @@ import 'tracking_state.dart';
 /// 2. Audio playback state monitoring (AudioPlaybackState)
 /// 3. Device-specific & continuous listening session lifecycles (ListeningSessionState)
 /// 4. Grace period handling strictly for audio stopping while connected
-/// 5. Database persistence via injectable DatabaseAdapter
+/// 5. Break Engine tracking actual continuous listening and smart reminders
+/// 6. Database persistence via injectable DatabaseAdapter
 class SessionEngine {
   static const Duration defaultGracePeriod = Duration(minutes: 3);
 
   final DatabaseAdapter _db;
+  final BreakEngine _breakEngine;
   Duration gracePeriod;
 
   SessionEngine({
     DatabaseAdapter? database,
+    BreakEngine? breakEngine,
     this.gracePeriod = defaultGracePeriod,
-  }) : _db = database ?? DatabaseHelper.instance;
+  })  : _db = database ?? DatabaseHelper.instance,
+        _breakEngine = breakEngine ?? BreakEngine();
+
+  BreakEngine get breakEngine => _breakEngine;
+  BreakState get breakState => _breakEngine.state;
 
   // Explicit Phase 3 State Machine Enums
   BluetoothConnectionState _connectionState =
@@ -158,7 +168,39 @@ class SessionEngine {
   // =========================================================================
 
   Future<void> initialize() async {
+    _breakEngine.onBreakStateChanged = (_) {
+      onStateChanged?.call();
+    };
+    final savedSettings = await _db.getBreakReminderSettings();
+    _breakEngine.updateConfig(savedSettings.toBreakRuleConfig());
     await refreshHistory();
+  }
+
+  /// Updates break reminder configuration, persists to DB, and reapplies dynamically.
+  Future<void> updateBreakReminderSettings(
+    BreakReminderSettings settings,
+  ) async {
+    await _db.saveBreakReminderSettings(settings);
+    await _breakEngine.updateConfig(settings.toBreakRuleConfig());
+    _onTick();
+    onStateChanged?.call();
+  }
+
+  /// Retrieves the currently persisted break reminder settings.
+  Future<BreakReminderSettings> getBreakReminderSettings() async {
+    return await _db.getBreakReminderSettings();
+  }
+
+  /// Snoozes the active break reminder for [duration] or the configured snooze duration.
+  Future<void> snoozeBreakReminder([Duration? duration]) async {
+    await _breakEngine.snooze(duration);
+    onStateChanged?.call();
+  }
+
+  /// Dismisses the break reminder for the current threshold.
+  Future<void> dismissBreakReminder([int? notificationId]) async {
+    await _breakEngine.dismiss(notificationId);
+    onStateChanged?.call();
   }
 
   Future<void> refreshHistory() async {
@@ -200,6 +242,8 @@ class SessionEngine {
     _currentContinuousSession = null;
     if (continuousToClose != null) {
       await _closeContinuousSession(continuousToClose, now);
+    } else {
+      await _breakEngine.reset();
     }
 
     _currentAudioSegmentStartedAt = null;
@@ -376,7 +420,9 @@ class SessionEngine {
     final connectionType = event['connectionType'] as String?;
     final deviceAddress = event['deviceAddress'] as String?;
 
-    final now = DateTime.now();
+    final now = event['timestamp'] != null
+        ? DateTime.fromMillisecondsSinceEpoch(event['timestamp'] as int)
+        : DateTime.now();
 
     switch (type) {
       case 'DEVICE_CONNECTED':
@@ -491,6 +537,8 @@ class SessionEngine {
             _currentContinuousSession = null;
             if (continuousToClose != null) {
               await _closeContinuousSession(continuousToClose, now);
+            } else {
+              await _breakEngine.reset();
             }
 
             _sessionState = ListeningSessionState.idle;
@@ -676,6 +724,7 @@ class SessionEngine {
 
           _activeOutputDevice = newDevice;
           _connectionState = BluetoothConnectionState.connected;
+          _breakEngine.onDeviceSwitched(newDevice);
 
           if (_activeConnectionRecord == null ||
               _activeConnectionRecord!.deviceId != stableId) {
@@ -688,6 +737,20 @@ class SessionEngine {
           } else {
             _sessionState = ListeningSessionState.idle;
           }
+        }
+        break;
+
+      case 'BREAK_ACTION':
+        final action = event['action'] as String?;
+        final notificationId = event['id'] as int?;
+        final snoozeMinutes = event['snoozeMinutes'] as int?;
+        if (action == 'snooze') {
+          final dur = snoozeMinutes != null
+              ? Duration(minutes: snoozeMinutes)
+              : null;
+          await _breakEngine.snooze(dur);
+        } else if (action == 'dismiss') {
+          await _breakEngine.dismiss(notificationId);
         }
         break;
     }
@@ -853,6 +916,7 @@ class SessionEngine {
   ) async {
     final completed = session.copyWith(endedAt: now, status: 'completed');
     await _db.saveContinuousSession(completed);
+    await _breakEngine.reset();
   }
 
   // =========================================================================
@@ -910,6 +974,8 @@ class SessionEngine {
     _currentContinuousSession = null;
     if (continuousToClose != null) {
       await _closeContinuousSession(continuousToClose, now);
+    } else {
+      await _breakEngine.reset();
     }
 
     await refreshHistory();
@@ -1023,12 +1089,47 @@ class SessionEngine {
     if (stateChanged) {
       onStateChanged?.call();
     }
+
+    // Update Break Engine with continuous actual listening metrics
+    final continuousListeningDuration = Duration(
+      seconds: _accumulatedActiveListeningSeconds +
+          (_currentAudioSegmentStartedAt != null
+              ? now.difference(_currentAudioSegmentStartedAt!).inSeconds
+              : 0),
+    );
+
+    _breakEngine.update(
+      continuousListeningDuration: continuousListeningDuration,
+      isAudioPlaying: _sessionState == ListeningSessionState.active,
+      isInGracePeriod: _sessionState == ListeningSessionState.gracePeriod,
+      activeDevice: _activeOutputDevice,
+    );
   }
 
   /// Exposed for testing to simulate timer ticks deterministically
   @visibleForTesting
   void triggerTickForTesting([DateTime? now]) {
     _onTick(now);
+  }
+
+  /// Debug-only method to advance simulated continuous listening time on the BreakEngine.
+  /// Unavailable and rejected in release builds.
+  void debugSimulateContinuousListening(Duration offset) {
+    if (!kDebugMode) {
+      throw UnsupportedError('Simulated listening is disabled in release builds.');
+    }
+    _breakEngine.debugAdvanceSimulatedListening(offset);
+    _onTick();
+  }
+
+  /// Debug-only method to reset simulated continuous listening time on the BreakEngine.
+  /// Unavailable and rejected in release builds.
+  void debugResetSimulatedListening() {
+    if (!kDebugMode) {
+      throw UnsupportedError('Simulated listening is disabled in release builds.');
+    }
+    _breakEngine.debugResetSimulatedListening();
+    _onTick();
   }
 
   // =========================================================================
@@ -1084,5 +1185,6 @@ class SessionEngine {
   void dispose() {
     _stopTicker();
     _cancelGracePeriod();
+    _breakEngine.dispose();
   }
 }

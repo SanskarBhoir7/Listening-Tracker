@@ -173,4 +173,55 @@ class AudioMonitorService {
       return false;
     }
   }
+
+  /// Display a break reminder notification via native Android NotificationManager.
+  Future<bool> showBreakNotification({
+    required int id,
+    required String title,
+    required String body,
+    int snoozeMinutes = 10,
+  }) async {
+    try {
+      final result = await _methodChannel.invokeMethod<bool>(
+        'showBreakNotification',
+        {
+          'id': id,
+          'title': title,
+          'body': body,
+          'snoozeMinutes': snoozeMinutes,
+        },
+      );
+      return result ?? false;
+    } catch (e) {
+      debugPrint('Failed to show break notification: $e');
+      return false;
+    }
+  }
+
+  /// Cancel a specific break notification by ID.
+  Future<bool> cancelBreakNotification(int id) async {
+    try {
+      final result = await _methodChannel.invokeMethod<bool>(
+        'cancelBreakNotification',
+        {'id': id},
+      );
+      return result ?? false;
+    } catch (e) {
+      debugPrint('Failed to cancel break notification: $e');
+      return false;
+    }
+  }
+
+  /// Cancel all break notifications.
+  Future<bool> cancelAllBreakNotifications() async {
+    try {
+      final result = await _methodChannel.invokeMethod<bool>(
+        'cancelAllBreakNotifications',
+      );
+      return result ?? false;
+    } catch (e) {
+      debugPrint('Failed to cancel all break notifications: $e');
+      return false;
+    }
+  }
 }

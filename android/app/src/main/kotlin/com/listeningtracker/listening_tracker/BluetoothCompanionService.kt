@@ -23,8 +23,8 @@ class BluetoothCompanionService : CompanionDeviceService() {
     @Deprecated("Deprecated in Java")
     override fun onDeviceAppeared(address: String) {
         Log.i(TAG, "Companion device appeared (address): $address")
-        NativeLifecycleDiagnostics.record(this, "COMPANION_DEVICE_APPEARED", mapOf("addressPresent" to address.isNotBlank()))
-        AudioMonitorBridge.handleBluetoothConnected(this, "Companion Device", address)
+        NativeLifecycleDiagnostics.record(this, "COMPANION_DEVICE_APPEARED", mapOf("addressPresent" to address.isNotBlank(), "startupPath" to "companion_service"))
+        AudioMonitorBridge.handleBluetoothConnected(this, "Companion Device", address, "companion_service")
     }
 
     @Deprecated("Deprecated in Java")
@@ -42,8 +42,8 @@ class BluetoothCompanionService : CompanionDeviceService() {
         }
         val name = associationInfo.displayName?.toString() ?: "Companion Device"
         Log.i(TAG, "Companion device appeared (AssociationInfo): $name ($address)")
-        NativeLifecycleDiagnostics.record(this, "COMPANION_DEVICE_APPEARED", mapOf("deviceName" to name, "addressPresent" to address.isNotBlank()))
-        AudioMonitorBridge.handleBluetoothConnected(this, name, address)
+        NativeLifecycleDiagnostics.record(this, "COMPANION_DEVICE_APPEARED", mapOf("deviceName" to name, "addressPresent" to address.isNotBlank(), "startupPath" to "companion_service"))
+        AudioMonitorBridge.handleBluetoothConnected(this, name, address, "companion_service")
     }
 
     override fun onDeviceDisappeared(associationInfo: android.companion.AssociationInfo) {

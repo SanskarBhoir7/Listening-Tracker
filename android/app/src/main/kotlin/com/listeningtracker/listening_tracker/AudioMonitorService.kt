@@ -47,11 +47,20 @@ class AudioMonitorService : Service() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         val action = intent?.action
-        Log.d(TAG, "Service onStartCommand: action=$action, startId=$startId")
+        val startupPath = intent?.getStringExtra("startupPath") ?: intent?.getStringExtra("origin") ?: "unknown"
+        Log.d(TAG, "Service onStartCommand: action=$action, startId=$startId, startupPath=$startupPath")
         NativeLifecycleDiagnostics.record(this, "SERVICE_START_COMMAND", mapOf(
             "action" to (action ?: "sticky_restart_null_intent"),
             "startId" to startId,
+            "startupPath" to startupPath,
         ))
+
+        if (startupPath == "notification_action") {
+            NativeLifecycleDiagnostics.record(this, "RECOVERY_TRIGGERED_FROM_NOTIFICATION", mapOf(
+                "deviceName" to (intent?.getStringExtra(EXTRA_DEVICE_NAME) ?: activeDeviceName),
+                "startId" to startId,
+            ))
+        }
 
         if (action == ACTION_STOP_MONITORING) {
             Log.d(TAG, "Handling ACTION_STOP_MONITORING: stopping foreground service")

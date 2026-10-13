@@ -48,53 +48,58 @@ class BluetoothConnectionReceiver : BroadcastReceiver() {
 
     override fun onReceive(context: Context, intent: Intent) {
         val action = intent.action ?: return
-        Log.d(TAG, "Received broadcast action: $action")
-        NativeLifecycleDiagnostics.record(context, "BLUETOOTH_RECEIVER_INVOKED", mapOf("action" to action))
+        val pendingResult = goAsync()
+        try {
+            Log.d(TAG, "Received broadcast action: $action")
+            NativeLifecycleDiagnostics.record(context, "BLUETOOTH_RECEIVER_INVOKED", mapOf("action" to action))
 
-        val device: BluetoothDevice? = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            intent.getParcelableExtra(BluetoothDevice.EXTRA_DEVICE, BluetoothDevice::class.java)
-        } else {
-            @Suppress("DEPRECATION")
-            intent.getParcelableExtra(BluetoothDevice.EXTRA_DEVICE)
-        }
-
-        val deviceName = try {
-            device?.name ?: "Bluetooth Audio Device"
-        } catch (e: SecurityException) {
-            "Bluetooth Audio Device"
-        }
-
-        val deviceAddress = try {
-            device?.address ?: ""
-        } catch (e: SecurityException) {
-            ""
-        }
-
-        when (action) {
-            BluetoothDevice.ACTION_ACL_CONNECTED -> {
-                if (isAudioPeripheral(device)) {
-                    Log.i(TAG, "Bluetooth audio device connected (ACL): $deviceName ($deviceAddress)")
-                    NativeLifecycleDiagnostics.record(context, "BLUETOOTH_AUDIO_DEVICE_DETECTED", mapOf("action" to action, "deviceName" to deviceName))
-                    AudioMonitorBridge.handleBluetoothConnected(context, deviceName, deviceAddress)
-                } else {
-                    Log.d(TAG, "Non-audio Bluetooth device connected; ignoring: $deviceName")
-                }
+            val device: BluetoothDevice? = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                intent.getParcelableExtra(BluetoothDevice.EXTRA_DEVICE, BluetoothDevice::class.java)
+            } else {
+                @Suppress("DEPRECATION")
+                intent.getParcelableExtra(BluetoothDevice.EXTRA_DEVICE)
             }
-            BluetoothA2dp.ACTION_CONNECTION_STATE_CHANGED -> {
-                val state = intent.getIntExtra(BluetoothProfile.EXTRA_STATE, -1)
-                val prevState = intent.getIntExtra(BluetoothProfile.EXTRA_PREVIOUS_STATE, -1)
-                Log.d(TAG, "A2DP connection state changed: $prevState -> $state for $deviceName")
-                if (state == BluetoothProfile.STATE_CONNECTED) {
-                    NativeLifecycleDiagnostics.record(context, "BLUETOOTH_AUDIO_DEVICE_DETECTED", mapOf("action" to action, "deviceName" to deviceName, "state" to state))
-                    AudioMonitorBridge.handleBluetoothConnected(context, deviceName, deviceAddress)
-                } else if (state == BluetoothProfile.STATE_DISCONNECTED) {
+
+            val deviceName = try {
+                device?.name ?: "Bluetooth Audio Device"
+            } catch (e: SecurityException) {
+                "Bluetooth Audio Device"
+            }
+
+            val deviceAddress = try {
+                device?.address ?: ""
+            } catch (e: SecurityException) {
+                ""
+            }
+
+            when (action) {
+                BluetoothDevice.ACTION_ACL_CONNECTED -> {
+                    if (isAudioPeripheral(device)) {
+                        Log.i(TAG, "Bluetooth audio device connected (ACL): $deviceName ($deviceAddress)")
+                        NativeLifecycleDiagnostics.record(context, "BLUETOOTH_AUDIO_DEVICE_DETECTED", mapOf("action" to action, "deviceName" to deviceName))
+                        AudioMonitorBridge.handleBluetoothConnected(context, deviceName, deviceAddress, "bluetooth_acl")
+                    } else {
+                        Log.d(TAG, "Non-audio Bluetooth device connected; ignoring: $deviceName")
+                    }
+                }
+                BluetoothA2dp.ACTION_CONNECTION_STATE_CHANGED -> {
+                    val state = intent.getIntExtra(BluetoothProfile.EXTRA_STATE, -1)
+                    val prevState = intent.getIntExtra(BluetoothProfile.EXTRA_PREVIOUS_STATE, -1)
+                    Log.d(TAG, "A2DP connection state changed: $prevState -> $state for $deviceName")
+                    if (state == BluetoothProfile.STATE_CONNECTED) {
+                        NativeLifecycleDiagnostics.record(context, "BLUETOOTH_AUDIO_DEVICE_DETECTED", mapOf("action" to action, "deviceName" to deviceName, "state" to state))
+                        AudioMonitorBridge.handleBluetoothConnected(context, deviceName, deviceAddress, "bluetooth_a2dp")
+                    } else if (state == BluetoothProfile.STATE_DISCONNECTED) {
+                        AudioMonitorBridge.handleBluetoothDisconnected(context, deviceName, deviceAddress)
+                    }
+                }
+                BluetoothDevice.ACTION_ACL_DISCONNECTED -> {
+                    Log.i(TAG, "Bluetooth device disconnected (ACL): $deviceName ($deviceAddress)")
                     AudioMonitorBridge.handleBluetoothDisconnected(context, deviceName, deviceAddress)
                 }
             }
-            BluetoothDevice.ACTION_ACL_DISCONNECTED -> {
-                Log.i(TAG, "Bluetooth device disconnected (ACL): $deviceName ($deviceAddress)")
-                AudioMonitorBridge.handleBluetoothDisconnected(context, deviceName, deviceAddress)
-            }
+        } finally {
+            pendingResult.finish()
         }
     }
 }

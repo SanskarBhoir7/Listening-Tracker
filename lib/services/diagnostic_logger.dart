@@ -18,8 +18,8 @@ class DiagnosticLogger {
   static final DiagnosticLogger instance = DiagnosticLogger._internal();
 
   DatabaseAdapter? _database;
-  bool _isLogging = false;
   int _eventCounter = 0;
+  Future<void> _writeQueue = Future.value();
 
   final StreamController<DiagnosticEvent> _streamController =
       StreamController<DiagnosticEvent>.broadcast();
@@ -40,6 +40,7 @@ class DiagnosticLogger {
   /// Initializes or updates the active database adapter.
   void setDatabase(DatabaseAdapter database) {
     _database = database;
+    _writeQueue = Future.value();
   }
 
   /// Alias for [log]
@@ -224,67 +225,72 @@ class DiagnosticLogger {
     String? errorDetails,
     Map<String, dynamic>? metadata,
   }) async {
-    // Re-entrancy guard to avoid recursive logging loops if database operations fail.
-    if (_isLogging) {
+    // Prevent recursive logging loops specifically originating from within database persistence calls
+    if (StackTrace.current.toString().contains('saveDiagnosticEvent')) {
       debugPrint(
         'DiagnosticLogger: Recursive logging prevented for $eventType',
       );
       return null;
     }
 
-    _isLogging = true;
-    try {
-      final nowMs = timestampMs ?? DateTime.now().millisecondsSinceEpoch;
-      final dt = DateTime.fromMillisecondsSinceEpoch(nowMs);
-      final paddedCounter = (++_eventCounter).toString().padLeft(6, '0');
-      final id = eventId ?? 'diag_${nowMs}_$paddedCounter';
+    final nowMs = timestampMs ?? DateTime.now().millisecondsSinceEpoch;
+    final dt = DateTime.fromMillisecondsSinceEpoch(nowMs);
+    final paddedCounter = (++_eventCounter).toString().padLeft(6, '0');
+    final id = eventId ?? 'diag_${nowMs}_$paddedCounter';
 
-      final event = DiagnosticEvent(
-        id: id,
-        timestamp: nowMs,
-        timestampIso: dt.toIso8601String(),
-        eventType: eventType,
-        source: source,
-        deviceId: deviceId,
-        deviceName: deviceName,
-        deviceType: deviceType,
-        connectionType: connectionType,
-        connectionState: connectionState,
-        audioState: audioState,
-        sessionState: sessionState,
-        reason: reason,
-        details: details,
-        playbackConfigsCount: playbackConfigsCount,
-        activeMediaCount: activeMediaCount,
-        playbackStates: playbackStates,
-        isMusicActive: isMusicActive,
-        isA2dpStreaming: isA2dpStreaming,
-        prevPlaying: prevPlaying,
-        resolvedPlaying: resolvedPlaying,
-        resolverReason: resolverReason,
-        stopConfirmationStatus: stopConfirmationStatus,
-        durationSeconds: durationSeconds,
-        errorDetails: errorDetails,
-        metadata: metadata,
-      );
+    final event = DiagnosticEvent(
+      id: id,
+      timestamp: nowMs,
+      timestampIso: dt.toIso8601String(),
+      eventType: eventType,
+      source: source,
+      deviceId: deviceId,
+      deviceName: deviceName,
+      deviceType: deviceType,
+      connectionType: connectionType,
+      connectionState: connectionState,
+      audioState: audioState,
+      sessionState: sessionState,
+      reason: reason,
+      details: details,
+      playbackConfigsCount: playbackConfigsCount,
+      activeMediaCount: activeMediaCount,
+      playbackStates: playbackStates,
+      isMusicActive: isMusicActive,
+      isA2dpStreaming: isA2dpStreaming,
+      prevPlaying: prevPlaying,
+      resolvedPlaying: resolvedPlaying,
+      resolverReason: resolverReason,
+      stopConfirmationStatus: stopConfirmationStatus,
+      durationSeconds: durationSeconds,
+      errorDetails: errorDetails,
+      metadata: metadata,
+    );
 
-      // 1. Broadcast to UI observers
-      if (!_streamController.isClosed) {
-        _streamController.add(event);
-      }
-
-      // 2. Persist to SQLite
-      if (_database != null) {
-        await _database!.saveDiagnosticEvent(event);
-      }
-
-      return event;
-    } catch (e) {
-      debugPrint('DiagnosticLogger: Failed to persist event $eventType: $e');
-      return null;
-    } finally {
-      _isLogging = false;
+    // 1. Broadcast to UI observers immediately
+    if (!_streamController.isClosed) {
+      _streamController.add(event);
     }
+
+    // 2. Persist to SQLite via sequential queue (preserves order and never drops concurrent events)
+    if (_database != null) {
+      final completer = Completer<DiagnosticEvent?>();
+      _writeQueue = _writeQueue.then((_) async {
+        try {
+          await _database!.saveDiagnosticEvent(event);
+          completer.complete(event);
+        } catch (e) {
+          debugPrint('DiagnosticLogger: Failed to persist event $eventType: $e');
+          completer.complete(event);
+        }
+      }).catchError((e) {
+        debugPrint('DiagnosticLogger: Queue error for $eventType: $e');
+        completer.complete(event);
+      });
+      return completer.future;
+    }
+
+    return event;
   }
 
   /// Exports diagnostic events matching optional filters as structured JSON string.

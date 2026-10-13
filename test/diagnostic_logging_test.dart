@@ -295,6 +295,21 @@ void main() {
       expect(recursiveAdapter.attemptedWrites, equals(1));
     });
 
+    test('rapid concurrent logEvent calls are all persisted without dropping', () async {
+      final results = await Future.wait([
+        logger.logEvent(eventType: 'EVENT_A', source: 'native'),
+        logger.logEvent(eventType: 'EVENT_B', source: 'native'),
+        logger.logEvent(eventType: 'AUDIO_STARTED', source: 'native'),
+        logger.logEvent(eventType: 'LISTENING_STARTED', source: 'flutter'),
+      ]);
+
+      expect(results.every((r) => r != null), isTrue);
+      final inDb = await adapter.getDiagnosticEvents();
+      expect(inDb.length, equals(4));
+      final types = inDb.map((e) => e.eventType).toSet();
+      expect(types, containsAll(['EVENT_A', 'EVENT_B', 'AUDIO_STARTED', 'LISTENING_STARTED']));
+    });
+
     test('exportEventsAsJson outputs valid JSON array', () async {
       await logger.logEvent(
         eventType: 'EVENT_1',

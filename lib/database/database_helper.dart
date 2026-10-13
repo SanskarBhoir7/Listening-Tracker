@@ -1,8 +1,10 @@
 import 'dart:async';
+import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'package:path/path.dart' as p;
 import 'package:sqflite/sqflite.dart';
 import '../models/audio_device.dart';
+import '../models/break_reminder_settings.dart';
 import '../models/connection_record.dart';
 import '../models/continuous_session.dart';
 import '../models/daily_stats.dart';
@@ -18,12 +20,20 @@ import 'database_adapter.dart';
 /// - Continuous Listening Sessions
 /// - Bluetooth Connection Records (Phase 3 v2)
 /// - Diagnostic Event Logs (Phase 5 v3)
+/// - App Settings & Preferences
 class DatabaseHelper implements DatabaseAdapter {
   static final DatabaseHelper instance = DatabaseHelper._init();
   static Database? _database;
   static int _diagnosticWriteCounter = 0;
   static const int maxDiagnosticEvents = 10000;
   static const int databaseVersion = 3;
+
+  static const String createAppSettingsTableSql = '''
+    CREATE TABLE IF NOT EXISTS app_settings (
+      key TEXT PRIMARY KEY,
+      value TEXT NOT NULL
+    )
+  ''';
 
   static const String createDiagnosticEventsTableSql = '''
     CREATE TABLE IF NOT EXISTS diagnostic_events (
@@ -68,15 +78,18 @@ class DatabaseHelper implements DatabaseAdapter {
     final dbPath = await getDatabasesPath();
     final path = p.join(dbPath, filePath);
 
-    return await openDatabase(
+    final db = await openDatabase(
       path,
       version: 3,
       onCreate: _createDB,
       onUpgrade: _onUpgradeDB,
     );
+    await db.execute(createAppSettingsTableSql);
+    return db;
   }
 
   Future<void> _createDB(Database db, int version) async {
+    await db.execute(createAppSettingsTableSql);
     await db.execute('''
       CREATE TABLE devices (
         id TEXT PRIMARY KEY,
@@ -825,6 +838,48 @@ class DatabaseHelper implements DatabaseAdapter {
       await db.delete('diagnostic_events');
     } catch (e) {
       debugPrint('DatabaseHelper: Failed to clear diagnostic events: $e');
+    }
+  }
+
+  // App Settings & Preferences
+  @override
+  Future<void> saveSetting(String key, String value) async {
+    final db = await database;
+    await db.insert(
+      'app_settings',
+      {'key': key, 'value': value},
+      conflictAlgorithm: ConflictAlgorithm.replace,
+    );
+  }
+
+  @override
+  Future<String?> getSetting(String key) async {
+    final db = await database;
+    final results = await db.query(
+      'app_settings',
+      where: 'key = ?',
+      whereArgs: [key],
+      limit: 1,
+    );
+    if (results.isEmpty) return null;
+    return results.first['value'] as String?;
+  }
+
+  @override
+  Future<void> saveBreakReminderSettings(BreakReminderSettings settings) async {
+    await saveSetting('break_reminder_settings', jsonEncode(settings.toMap()));
+  }
+
+  @override
+  Future<BreakReminderSettings> getBreakReminderSettings() async {
+    final raw = await getSetting('break_reminder_settings');
+    if (raw == null) return const BreakReminderSettings();
+    try {
+      final decoded = jsonDecode(raw) as Map<String, dynamic>;
+      return BreakReminderSettings.fromMap(decoded);
+    } catch (e) {
+      debugPrint('DatabaseHelper: Failed to parse break reminder settings: $e');
+      return const BreakReminderSettings();
     }
   }
 }

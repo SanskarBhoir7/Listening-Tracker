@@ -84,6 +84,10 @@
                 android:value="Audio device and playback state monitoring for listening duration tracking" />
         </service>
 
+        <receiver
+            android:name=".BreakActionReceiver"
+            android:exported="false" />
+
         <provider
             android:name="androidx.core.content.FileProvider"
             android:authorities="${applicationId}.fileprovider"

@@ -1,15 +1,18 @@
 import 'dart:async';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import 'audio_monitor_service.dart';
 import 'database/database_adapter.dart';
 import 'database/database_helper.dart';
+import 'models/break_state.dart';
 import 'session_engine.dart';
 import 'tracking_state.dart';
 import 'services/diagnostic_logger.dart';
 import 'views/analytics_view.dart';
+import 'views/break_settings_view.dart';
 import 'views/diagnostic_log_viewer.dart';
 import 'views/history_view.dart';
 
@@ -439,6 +442,18 @@ class _MonitorDashboardState extends State<MonitorDashboard>
         centerTitle: true,
         actions: [
           IconButton(
+            key: const Key('appbar_break_settings_button'),
+            icon: const Icon(Icons.timer_outlined),
+            onPressed: () {
+              Navigator.of(context).push(
+                MaterialPageRoute(
+                  builder: (_) => BreakSettingsView(sessionEngine: _engine),
+                ),
+              );
+            },
+            tooltip: 'Break reminder settings',
+          ),
+          IconButton(
             key: const Key('appbar_refresh_button'),
             icon: const Icon(Icons.refresh),
             onPressed: (_selectedTabIndex == 0 && !_engine.isMonitoring)
@@ -509,6 +524,8 @@ class _MonitorDashboardState extends State<MonitorDashboard>
           _buildStateIndicator(currentState, stateColor),
           const SizedBox(height: 12),
           _buildDualDurationCard(),
+          const SizedBox(height: 12),
+          _buildBreakStatusCard(),
           const SizedBox(height: 12),
           _buildLiveSessionCard(),
           const SizedBox(height: 12),
@@ -799,6 +816,483 @@ class _MonitorDashboardState extends State<MonitorDashboard>
           ),
         ),
       ],
+    );
+  }
+
+  Widget _buildBreakStatusCard() {
+    final breakState = _engine.breakState;
+    final color = breakState.statusColor;
+
+    return Card(
+      key: const Key('break_status_card'),
+      color: Colors.grey.shade900,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(12),
+        side: BorderSide(
+          color: breakState.status != BreakStatus.normal
+              ? color.withValues(alpha: 0.8)
+              : Colors.white12,
+          width: breakState.status != BreakStatus.normal ? 1.5 : 1,
+        ),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Expanded(
+                  child: Row(
+                    children: [
+                      Icon(
+                        breakState.status == BreakStatus.normal
+                            ? Icons.headphones
+                            : (breakState.status == BreakStatus.breakSoon
+                                ? Icons.alarm
+                                : Icons.warning_amber_rounded),
+                        color: color,
+                        size: 18,
+                      ),
+                      const SizedBox(width: 8),
+                      const Flexible(
+                        child: FittedBox(
+                          fit: BoxFit.scaleDown,
+                          child: Text(
+                            'BREAK ENGINE',
+                            style: TextStyle(
+                              fontWeight: FontWeight.bold,
+                              fontSize: 13,
+                              letterSpacing: 1.1,
+                            ),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Flexible(
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    mainAxisAlignment: MainAxisAlignment.end,
+                    children: [
+                      if (breakState.isSimulated) ...[
+                        FittedBox(
+                          fit: BoxFit.scaleDown,
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 6,
+                              vertical: 2,
+                            ),
+                            decoration: BoxDecoration(
+                              color: Colors.purple.shade900.withValues(alpha: 0.6),
+                              borderRadius: BorderRadius.circular(4),
+                              border: Border.all(
+                                color: Colors.purpleAccent,
+                                width: 0.8,
+                              ),
+                            ),
+                            child: const Text(
+                              'SIMULATED',
+                              style: TextStyle(
+                                fontSize: 9,
+                                fontWeight: FontWeight.bold,
+                                color: Colors.purpleAccent,
+                                letterSpacing: 0.6,
+                              ),
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 6),
+                      ],
+                      Flexible(
+                        child: FittedBox(
+                          fit: BoxFit.scaleDown,
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 8,
+                              vertical: 3,
+                            ),
+                            decoration: BoxDecoration(
+                              color: color.withValues(alpha: 0.15),
+                              borderRadius: BorderRadius.circular(6),
+                              border: Border.all(color: color.withValues(alpha: 0.5)),
+                            ),
+                            child: Text(
+                              breakState.statusLabel,
+                              style: TextStyle(
+                                fontSize: 11,
+                                fontWeight: FontWeight.bold,
+                                color: color,
+                                letterSpacing: 0.8,
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 4),
+                      IconButton(
+                        key: const Key('card_break_settings_button'),
+                        icon: const Icon(Icons.settings_outlined, size: 16),
+                        color: Colors.grey.shade400,
+                        padding: EdgeInsets.zero,
+                        constraints: const BoxConstraints(minWidth: 28, minHeight: 28),
+                        tooltip: 'Configure break reminders',
+                        onPressed: () {
+                          Navigator.of(context).push(
+                            MaterialPageRoute(
+                              builder: (_) => BreakSettingsView(sessionEngine: _engine),
+                            ),
+                          );
+                        },
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 12),
+            Row(
+              children: [
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      FittedBox(
+                        fit: BoxFit.scaleDown,
+                        child: Text(
+                          'CONTINUOUS LISTENING',
+                          style: TextStyle(
+                            fontSize: 10,
+                            color: Colors.grey.shade400,
+                            letterSpacing: 0.8,
+                          ),
+                        ),
+                      ),
+                      const SizedBox(height: 4),
+                      FittedBox(
+                        fit: BoxFit.scaleDown,
+                        child: Text(
+                          breakState.listeningDurationFormatted,
+                          style: const TextStyle(
+                            fontSize: 20,
+                            fontWeight: FontWeight.bold,
+                            color: Colors.white,
+                            fontFamily: 'monospace',
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      FittedBox(
+                        fit: BoxFit.scaleDown,
+                        child: Text(
+                          'NEXT THRESHOLD',
+                          style: TextStyle(
+                            fontSize: 10,
+                            color: Colors.grey.shade400,
+                            letterSpacing: 0.8,
+                          ),
+                        ),
+                      ),
+                      const SizedBox(height: 4),
+                      FittedBox(
+                        fit: BoxFit.scaleDown,
+                        child: Text(
+                          breakState.timeUntilNextThresholdFormatted,
+                          style: TextStyle(
+                            fontSize: 20,
+                            fontWeight: FontWeight.bold,
+                            color: breakState.timeUntilNextThreshold == Duration.zero
+                                ? Colors.grey.shade500
+                                : Colors.tealAccent,
+                            fontFamily: 'monospace',
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 12),
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.all(10),
+              decoration: BoxDecoration(
+                color: color.withValues(alpha: 0.08),
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Icon(
+                    Icons.info_outline,
+                    size: 15,
+                    color: color,
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      breakState.recommendation,
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: Colors.grey.shade300,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            if (breakState.isEnabled &&
+                (breakState.status != BreakStatus.normal ||
+                    breakState.isSnoozed)) ...[
+              const SizedBox(height: 12),
+              Row(
+                children: [
+                  Expanded(
+                    child: ElevatedButton.icon(
+                      key: const Key('card_snooze_break_button'),
+                      icon: const Icon(Icons.snooze, size: 16),
+                      label: Text(
+                        breakState.isSnoozed
+                            ? 'Snoozed (~${breakState.snoozeRemaining != null ? (breakState.snoozeRemaining!.inSeconds / 60).ceil() : 0}m)'
+                            : 'Snooze',
+                      ),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: Colors.amberAccent.shade700,
+                        foregroundColor: Colors.black,
+                        padding: const EdgeInsets.symmetric(vertical: 8),
+                        textStyle: const TextStyle(
+                          fontWeight: FontWeight.bold,
+                          fontSize: 12,
+                        ),
+                      ),
+                      onPressed: () async {
+                        await _engine.snoozeBreakReminder();
+                      },
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: OutlinedButton.icon(
+                      key: const Key('card_dismiss_break_button'),
+                      icon: const Icon(Icons.close, size: 16),
+                      label: Text(
+                        breakState.isDismissed ? 'Dismissed' : 'Dismiss',
+                      ),
+                      style: OutlinedButton.styleFrom(
+                        foregroundColor: Colors.white,
+                        side: const BorderSide(color: Colors.white24),
+                        padding: const EdgeInsets.symmetric(vertical: 8),
+                        textStyle: const TextStyle(
+                          fontWeight: FontWeight.bold,
+                          fontSize: 12,
+                        ),
+                      ),
+                      onPressed: breakState.isDismissed
+                          ? null
+                          : () async {
+                              await _engine.dismissBreakReminder();
+                            },
+                    ),
+                  ),
+                ],
+              ),
+            ],
+            if (!breakState.isEnabled) ...[
+              const SizedBox(height: 10),
+              InkWell(
+                onTap: () {
+                  Navigator.of(context).push(
+                    MaterialPageRoute(
+                      builder: (_) => BreakSettingsView(sessionEngine: _engine),
+                    ),
+                  );
+                },
+                child: Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 10,
+                    vertical: 6,
+                  ),
+                  decoration: BoxDecoration(
+                    color: Colors.white10,
+                    borderRadius: BorderRadius.circular(6),
+                  ),
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: const [
+                      Text(
+                        'Reminders are paused in settings',
+                        style: TextStyle(fontSize: 11, color: Colors.grey),
+                      ),
+                      Text(
+                        'Configure',
+                        style: TextStyle(
+                          fontSize: 11,
+                          color: Colors.tealAccent,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ],
+            if (kDebugMode) ...[
+              const SizedBox(height: 12),
+              Container(
+                padding: const EdgeInsets.all(10),
+                decoration: BoxDecoration(
+                  color: Colors.black38,
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(
+                    color: Colors.purpleAccent.withValues(alpha: 0.4),
+                    width: 1,
+                  ),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        const Icon(
+                          Icons.bug_report,
+                          size: 14,
+                          color: Colors.purpleAccent,
+                        ),
+                        const SizedBox(width: 6),
+                        Flexible(
+                          child: FittedBox(
+                            fit: BoxFit.scaleDown,
+                            alignment: Alignment.centerLeft,
+                            child: Text(
+                              'DEBUG TEST SIMULATION',
+                              style: TextStyle(
+                                fontSize: 10,
+                                fontWeight: FontWeight.bold,
+                                color: Colors.purpleAccent.shade100,
+                                letterSpacing: 0.8,
+                              ),
+                            ),
+                          ),
+                        ),
+                        if (breakState.isSimulated) ...[
+                          const SizedBox(width: 6),
+                          FittedBox(
+                            fit: BoxFit.scaleDown,
+                            child: Text(
+                              '+${_engine.breakEngine.debugSimulatedOffset.inMinutes}m added',
+                              style: const TextStyle(
+                                fontSize: 10,
+                                color: Colors.purpleAccent,
+                                fontFamily: 'monospace',
+                              ),
+                            ),
+                          ),
+                        ],
+                      ],
+                    ),
+                    const SizedBox(height: 8),
+                    Wrap(
+                      spacing: 8,
+                      runSpacing: 6,
+                      children: [
+                        OutlinedButton(
+                          key: const Key('btn_simulate_45m'),
+                          onPressed: () {
+                            _engine.debugSimulateContinuousListening(
+                              const Duration(minutes: 45),
+                            );
+                          },
+                          style: OutlinedButton.styleFrom(
+                            visualDensity: VisualDensity.compact,
+                            side: const BorderSide(color: Colors.amberAccent),
+                            foregroundColor: Colors.amberAccent,
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 8,
+                              vertical: 4,
+                            ),
+                          ),
+                          child: const FittedBox(
+                            fit: BoxFit.scaleDown,
+                            child: Text(
+                              '+45m (Break Soon)',
+                              style: TextStyle(fontSize: 11),
+                            ),
+                          ),
+                        ),
+                        OutlinedButton(
+                          key: const Key('btn_simulate_15m'),
+                          onPressed: () {
+                            _engine.debugSimulateContinuousListening(
+                              const Duration(minutes: 15),
+                            );
+                          },
+                          style: OutlinedButton.styleFrom(
+                            visualDensity: VisualDensity.compact,
+                            side: const BorderSide(
+                              color: Colors.deepOrangeAccent,
+                            ),
+                            foregroundColor: Colors.deepOrangeAccent,
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 8,
+                              vertical: 4,
+                            ),
+                          ),
+                          child: const FittedBox(
+                            fit: BoxFit.scaleDown,
+                            child: Text(
+                              '+15m (Reach 60m)',
+                              style: TextStyle(fontSize: 11),
+                            ),
+                          ),
+                        ),
+                        OutlinedButton(
+                          key: const Key('btn_reset_simulation'),
+                          onPressed: breakState.isSimulated
+                              ? () {
+                                  _engine.debugResetSimulatedListening();
+                                }
+                              : null,
+                          style: OutlinedButton.styleFrom(
+                            visualDensity: VisualDensity.compact,
+                            side: BorderSide(
+                              color: breakState.isSimulated
+                                  ? Colors.grey
+                                  : Colors.grey.shade800,
+                            ),
+                            foregroundColor: Colors.grey.shade300,
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 8,
+                              vertical: 4,
+                            ),
+                          ),
+                          child: const FittedBox(
+                            fit: BoxFit.scaleDown,
+                            child: Text(
+                              'Reset Sim',
+                              style: TextStyle(fontSize: 11),
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ],
+        ),
+      ),
     );
   }
 

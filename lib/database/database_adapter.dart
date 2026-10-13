@@ -1,4 +1,6 @@
+import 'dart:convert';
 import '../models/audio_device.dart';
+import '../models/break_reminder_settings.dart';
 import '../models/connection_record.dart';
 import '../models/continuous_session.dart';
 import '../models/daily_stats.dart';
@@ -55,6 +57,12 @@ abstract class DatabaseAdapter {
   });
   Future<int> pruneDiagnosticEvents({int keepLatest = 10000});
   Future<void> clearDiagnosticEvents();
+
+  // App Settings & Preferences
+  Future<void> saveSetting(String key, String value);
+  Future<String?> getSetting(String key);
+  Future<void> saveBreakReminderSettings(BreakReminderSettings settings);
+  Future<BreakReminderSettings> getBreakReminderSettings();
 }
 
 /// In-memory implementation of [DatabaseAdapter] for unit tests.
@@ -446,6 +454,35 @@ class InMemoryDatabaseAdapter implements DatabaseAdapter {
   @override
   Future<void> clearDiagnosticEvents() async {
     diagnosticEvents.clear();
+  }
+
+  final Map<String, String> _settings = {};
+
+  @override
+  Future<void> saveSetting(String key, String value) async {
+    _settings[key] = value;
+  }
+
+  @override
+  Future<String?> getSetting(String key) async {
+    return _settings[key];
+  }
+
+  @override
+  Future<void> saveBreakReminderSettings(BreakReminderSettings settings) async {
+    await saveSetting('break_reminder_settings', jsonEncode(settings.toMap()));
+  }
+
+  @override
+  Future<BreakReminderSettings> getBreakReminderSettings() async {
+    final raw = await getSetting('break_reminder_settings');
+    if (raw == null) return const BreakReminderSettings();
+    try {
+      final decoded = jsonDecode(raw) as Map<String, dynamic>;
+      return BreakReminderSettings.fromMap(decoded);
+    } catch (_) {
+      return const BreakReminderSettings();
+    }
   }
 }
 

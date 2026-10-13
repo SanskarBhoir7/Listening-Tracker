@@ -290,7 +290,7 @@ class AudioMonitorEngine(private val context: Context) {
      * Handles external Bluetooth connection event dispatched by persistent system-managed observer
      * (BluetoothConnectionReceiver or CompanionDeviceService).
      */
-    fun handleDeviceConnected(name: String, address: String) {
+    fun handleDeviceConnected(name: String, address: String, triggerLifecycleRequest: Boolean = true) {
         val alreadyTracked = connectedAudioDevices.values.any {
             (address.isNotBlank() && it.address.equals(address, ignoreCase = true)) ||
             (name.isNotBlank() && it.name.equals(name, ignoreCase = true))
@@ -329,7 +329,7 @@ class AudioMonitorEngine(private val context: Context) {
             ))
         }
 
-        if (!isMonitoring) {
+        if (!isMonitoring && triggerLifecycleRequest) {
             Log.d(TAG, "Audio device active -> starting monitoring automatically")
             onMonitoringLifecycleRequested?.invoke(true)
         }

@@ -1,6 +1,7 @@
 package com.listeningtracker.listening_tracker
 
 import android.app.Activity
+import android.app.ForegroundServiceStartNotAllowedException
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
@@ -185,6 +186,23 @@ object AudioMonitorBridge {
                         NativeLifecycleDiagnostics.acknowledge(ctx, ids)
                         result.success(true)
                     }
+                    "showBreakNotification" -> {
+                        val id = call.argument<Int>("id") ?: BREAK_SOON_NOTIFICATION_ID
+                        val title = call.argument<String>("title") ?: "Listening Break Reminder"
+                        val body = call.argument<String>("body") ?: "Time to give your ears a rest."
+                        val snoozeMinutes = call.argument<Int>("snoozeMinutes") ?: 10
+                        val success = showBreakNotification(ctx, id, title, body, snoozeMinutes)
+                        result.success(success)
+                    }
+                    "cancelBreakNotification" -> {
+                        val id = call.argument<Int>("id") ?: BREAK_SOON_NOTIFICATION_ID
+                        cancelBreakNotification(ctx, id)
+                        result.success(true)
+                    }
+                    "cancelAllBreakNotifications" -> {
+                        cancelAllBreakNotifications(ctx)
+                        result.success(true)
+                    }
                     else -> result.notImplemented()
                 }
             }
@@ -225,6 +243,21 @@ object AudioMonitorBridge {
                                     ))
                                 }
                             }
+                            val isAudioPlaying = state["isAudioPlaying"] as? Boolean ?: false
+                            if (isAudioPlaying) {
+                                val activeDev = devices?.firstOrNull() as? Map<*, *>
+                                events?.success(mapOf(
+                                    "type" to AudioEventType.AUDIO_STARTED.name,
+                                    "deviceId" to activeDev?.get("id"),
+                                    "deviceName" to (state["outputDeviceName"] ?: activeDev?.get("name")),
+                                    "deviceType" to (state["outputDeviceType"] ?: activeDev?.get("typeName")),
+                                    "connectionType" to (state["outputConnectionType"] ?: activeDev?.get("connectionType")),
+                                    "deviceAddress" to (state["outputDeviceAddress"] ?: activeDev?.get("address")),
+                                    "isAudioPlaying" to true,
+                                    "diagnostics" to "subscription_snapshot_playback_active",
+                                    "timestamp" to System.currentTimeMillis()
+                                ))
+                            }
                         }
                     }
                 }
@@ -238,8 +271,15 @@ object AudioMonitorBridge {
 
     private var lastConnectedAddress: String? = null
     private var lastConnectedTimestamp: Long = 0L
+    @Volatile private var lastServiceStartTimestamp: Long = 0L
+    @Volatile private var lastServiceStartOrigin: String? = null
 
-    fun handleBluetoothConnected(context: Context, deviceName: String, deviceAddress: String) {
+    fun handleBluetoothConnected(
+        context: Context,
+        deviceName: String,
+        deviceAddress: String,
+        startupPath: String = "bluetooth"
+    ) {
         val now = System.currentTimeMillis()
         val isRecentDuplicate = deviceAddress.isNotBlank() &&
             deviceAddress.equals(lastConnectedAddress, ignoreCase = true) &&
@@ -248,44 +288,71 @@ object AudioMonitorBridge {
         lastConnectedAddress = deviceAddress
         lastConnectedTimestamp = now
 
-        Log.d(TAG, "handleBluetoothConnected: device=$deviceName, address=$deviceAddress, isRecentDuplicate=$isRecentDuplicate")
+        Log.d(TAG, "handleBluetoothConnected: device=$deviceName, address=$deviceAddress, isRecentDuplicate=$isRecentDuplicate, startupPath=$startupPath")
         val appContext = context.applicationContext
         NativeLifecycleDiagnostics.record(appContext, "BLUETOOTH_CONNECTION_HANDLED", mapOf(
             "deviceName" to deviceName,
             "addressPresent" to deviceAddress.isNotBlank(),
             "isDuplicate" to isRecentDuplicate,
+            "startupPath" to startupPath,
         ))
 
         // Dismiss any existing fallback alert notification
         dismissFallbackNotification(appContext)
 
-        // 1. Initialize engine
+        // 1. Initialize engine (fast native callback setup)
         val engine = getOrCreateMonitorEngine(appContext)
 
-        // 2. Ensure FlutterEngine is active so SessionEngine processes events
-        ensureFlutterEngine(appContext)
-
-        // 3. Start foreground service (only if not already active or recently initiated for this device)
+        // 2. Start foreground service IMMEDIATELY from background receiver.
+        // CRITICAL FIX: Do NOT call ensureFlutterEngine() here! Cold-starting FlutterEngine synchronously
+        // takes 20+ seconds on the main thread, causing Android's temporary BroadcastReceiver FGS exemption
+        // (mAllowStartForeground) to expire and throw ForegroundServiceStartNotAllowedException.
+        // Instead, start the service directly. AudioMonitorService.onStartCommand() promotes to foreground
+        // immediately and then safely initializes FlutterEngine.
         if (!isRecentDuplicate && !engine.isMonitoring) {
             val serviceIntent = Intent(appContext, AudioMonitorService::class.java).apply {
                 action = AudioMonitorService.ACTION_START_MONITORING
                 putExtra(AudioMonitorService.EXTRA_DEVICE_NAME, deviceName)
                 putExtra(AudioMonitorService.EXTRA_DEVICE_ADDRESS, deviceAddress)
+                putExtra("origin", startupPath)
+                putExtra("startupPath", startupPath)
             }
+
+            NativeLifecycleDiagnostics.record(appContext, "SERVICE_START_REQUEST_DISPATCHED", mapOf(
+                "origin" to startupPath,
+                "startupPath" to startupPath,
+                "deviceName" to deviceName,
+                "addressPresent" to deviceAddress.isNotBlank(),
+            ))
 
             try {
                 ContextCompat.startForegroundService(appContext, serviceIntent)
-                Log.i(TAG, "startForegroundService initiated successfully from Bluetooth event")
-                NativeLifecycleDiagnostics.record(appContext, "SERVICE_START_REQUEST_ACCEPTED", mapOf("origin" to "bluetooth"))
+                lastServiceStartTimestamp = now
+                lastServiceStartOrigin = startupPath
+                Log.i(TAG, "startForegroundService initiated successfully from $startupPath")
+                NativeLifecycleDiagnostics.record(appContext, "SERVICE_START_REQUEST_ACCEPTED", mapOf(
+                    "origin" to startupPath,
+                    "startupPath" to startupPath,
+                ))
             } catch (e: Exception) {
-                Log.w(TAG, "Unable to start foreground service directly from background (${e.javaClass.simpleName}): ${e.message}")
-                NativeLifecycleDiagnostics.record(appContext, "SERVICE_START_REQUEST_REJECTED", mapOf("origin" to "bluetooth", "error" to e.javaClass.name, "message" to (e.message ?: "")))
-                showConnectionFallbackNotification(appContext, deviceName, deviceAddress)
+                val isFgsException = Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && e is ForegroundServiceStartNotAllowedException
+                Log.w(TAG, "Unable to start foreground service directly from $startupPath (${e.javaClass.simpleName}): ${e.message}")
+                NativeLifecycleDiagnostics.record(appContext, "SERVICE_START_REQUEST_REJECTED", mapOf(
+                    "origin" to startupPath,
+                    "startupPath" to startupPath,
+                    "error" to e.javaClass.name,
+                    "message" to (e.message ?: ""),
+                    "isForegroundServiceStartNotAllowed" to isFgsException,
+                    "isIgnoringBatteryOptimizations" to isIgnoringBatteryOptimizations(appContext),
+                    "isCompanionAssociated" to isCompanionAssociated(appContext),
+                    "recoveryStrategy" to "direct_notification_action",
+                ))
+                showConnectionFallbackNotification(appContext, deviceName, deviceAddress, startupPath)
             }
         }
 
-        // 4. Update engine device state
-        engine.handleDeviceConnected(deviceName, deviceAddress)
+        // 3. Update engine device state without triggering redundant startMonitoring lifecycle requests
+        engine.handleDeviceConnected(deviceName, deviceAddress, triggerLifecycleRequest = false)
     }
 
     fun handleBluetoothDisconnected(context: Context, deviceName: String, deviceAddress: String) {
@@ -318,8 +385,8 @@ object AudioMonitorBridge {
         }
     }
 
-    fun startMonitoringWithService(context: Context): Boolean {
-        Log.d(TAG, "startMonitoringWithService requested")
+    fun startMonitoringWithService(context: Context, startupPath: String = "bridge"): Boolean {
+        Log.d(TAG, "startMonitoringWithService requested from $startupPath")
         val appContext = context.applicationContext
 
         dismissFallbackNotification(appContext)
@@ -332,23 +399,45 @@ object AudioMonitorBridge {
         }
 
         val now = System.currentTimeMillis()
-        if (now - lastConnectedTimestamp < 1500L) {
-            Log.d(TAG, "Service start already in progress for recent connection event; skipping duplicate start")
+        if (now - lastServiceStartTimestamp < 1500L) {
+            Log.d(TAG, "Service start already in progress for recent request ($lastServiceStartOrigin); skipping duplicate start")
             return true
         }
 
         val serviceIntent = Intent(appContext, AudioMonitorService::class.java).apply {
             action = AudioMonitorService.ACTION_START_MONITORING
+            putExtra("origin", startupPath)
+            putExtra("startupPath", startupPath)
         }
+
+        NativeLifecycleDiagnostics.record(appContext, "SERVICE_START_REQUEST_DISPATCHED", mapOf(
+            "origin" to startupPath,
+            "startupPath" to startupPath,
+        ))
 
         try {
             ContextCompat.startForegroundService(appContext, serviceIntent)
-            NativeLifecycleDiagnostics.record(appContext, "SERVICE_START_REQUEST_ACCEPTED", mapOf("origin" to "bridge"))
+            lastServiceStartTimestamp = now
+            lastServiceStartOrigin = startupPath
+            NativeLifecycleDiagnostics.record(appContext, "SERVICE_START_REQUEST_ACCEPTED", mapOf(
+                "origin" to startupPath,
+                "startupPath" to startupPath,
+            ))
             return true
         } catch (e: Exception) {
-            Log.w(TAG, "Foreground service start rejected: ${e.message}")
-            NativeLifecycleDiagnostics.record(appContext, "SERVICE_START_REQUEST_REJECTED", mapOf("origin" to "bridge", "error" to e.javaClass.name, "message" to (e.message ?: "")))
-            showConnectionFallbackNotification(appContext, "Audio Device", "")
+            val isFgsException = Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && e is ForegroundServiceStartNotAllowedException
+            Log.w(TAG, "Foreground service start rejected ($startupPath): ${e.message}")
+            NativeLifecycleDiagnostics.record(appContext, "SERVICE_START_REQUEST_REJECTED", mapOf(
+                "origin" to startupPath,
+                "startupPath" to startupPath,
+                "error" to e.javaClass.name,
+                "message" to (e.message ?: ""),
+                "isForegroundServiceStartNotAllowed" to isFgsException,
+                "isIgnoringBatteryOptimizations" to isIgnoringBatteryOptimizations(appContext),
+                "isCompanionAssociated" to isCompanionAssociated(appContext),
+                "recoveryStrategy" to "direct_notification_action",
+            ))
+            showConnectionFallbackNotification(appContext, "Audio Device", "", startupPath)
             engine.stopMonitoring()
             return false
         }
@@ -367,34 +456,90 @@ object AudioMonitorBridge {
         appContext.stopService(serviceIntent)
     }
 
-    private fun showConnectionFallbackNotification(context: Context, deviceName: String, deviceAddress: String) {
+    private fun showConnectionFallbackNotification(
+        context: Context,
+        deviceName: String,
+        deviceAddress: String,
+        startupPath: String = "bluetooth"
+    ) {
         createAlertNotificationChannel(context)
 
-        val intent = Intent(context, MainActivity::class.java).apply {
+        // 1. Content intent: opens the Flutter app UI if the user taps the notification
+        val activityIntent = Intent(context, MainActivity::class.java).apply {
             flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
             putExtra("auto_start_monitoring", true)
             putExtra("device_name", deviceName)
         }
 
-        val pendingIntent = PendingIntent.getActivity(
+        val activityPendingIntent = PendingIntent.getActivity(
             context,
             0,
-            intent,
+            activityIntent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+
+        // 2. Direct Service Action: allows background recovery without opening the Flutter UI.
+        // Under Android 12+, interacting with a notification action grants an explicit FGS start exemption.
+        val serviceIntent = Intent(context, AudioMonitorService::class.java).apply {
+            action = AudioMonitorService.ACTION_START_MONITORING
+            putExtra(AudioMonitorService.EXTRA_DEVICE_NAME, deviceName)
+            putExtra(AudioMonitorService.EXTRA_DEVICE_ADDRESS, deviceAddress)
+            putExtra("origin", "notification_action")
+            putExtra("startupPath", "notification_action")
+        }
+
+        val servicePendingIntent = PendingIntent.getForegroundService(
+            context,
+            1,
+            serviceIntent,
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
 
         val notification = NotificationCompat.Builder(context, ALERT_CHANNEL_ID)
             .setSmallIcon(android.R.drawable.ic_media_play)
             .setContentTitle("$deviceName Connected")
-            .setContentText("Tap to start listening tracker session")
+            .setContentText("Tap to open app, or tap Start Monitoring below to run in background")
             .setPriority(NotificationCompat.PRIORITY_HIGH)
             .setDefaults(NotificationCompat.DEFAULT_ALL)
             .setAutoCancel(true)
-            .setContentIntent(pendingIntent)
+            .setContentIntent(activityPendingIntent)
+            .addAction(android.R.drawable.ic_media_play, "Start Monitoring", servicePendingIntent)
             .build()
 
         val notificationManager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
         notificationManager.notify(ALERT_NOTIFICATION_ID, notification)
+
+        NativeLifecycleDiagnostics.record(context, "RECOVERY_NOTIFICATION_POSTED", mapOf(
+            "deviceName" to deviceName,
+            "addressPresent" to deviceAddress.isNotBlank(),
+            "hasDirectServiceAction" to true,
+            "startupPath" to startupPath,
+        ))
+    }
+
+    fun syncCompanionDevicePresence(context: Context) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            val cdm = context.getSystemService(Context.COMPANION_DEVICE_SERVICE) as? CompanionDeviceManager
+                ?: return
+            try {
+                val associations = cdm.associations
+                Log.d(TAG, "Syncing companion device presence for ${associations.size} association(s)")
+                for (address in associations) {
+                    try {
+                        cdm.startObservingDevicePresence(address)
+                        Log.i(TAG, "Started observing companion device presence: $address")
+                        NativeLifecycleDiagnostics.record(context, "COMPANION_OBSERVATION_STARTED", mapOf(
+                            "addressPresent" to address.isNotBlank(),
+                            "address" to address
+                        ))
+                    } catch (e: Exception) {
+                        Log.w(TAG, "Failed startObservingDevicePresence for $address: ${e.message}")
+                    }
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "Failed to query companion device associations", e)
+            }
+        }
     }
 
     private fun dismissFallbackNotification(context: Context) {
@@ -416,6 +561,154 @@ object AudioMonitorBridge {
             val manager = context.getSystemService(NotificationManager::class.java)
             manager.createNotificationChannel(channel)
         }
+    }
+
+    const val BREAK_REMINDER_CHANNEL_ID = "listening_tracker_break_reminders"
+    const val BREAK_SOON_NOTIFICATION_ID = 3001
+    const val BREAK_RECOMMENDED_NOTIFICATION_ID = 3002
+
+    private fun createBreakReminderChannel(context: Context) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            val channel = NotificationChannel(
+                BREAK_REMINDER_CHANNEL_ID,
+                "Listening Break Reminders",
+                NotificationManager.IMPORTANCE_HIGH
+            ).apply {
+                description = "Periodic reminders to take ear breaks during continuous listening"
+                setShowBadge(true)
+            }
+            val manager = context.getSystemService(NotificationManager::class.java)
+            manager.createNotificationChannel(channel)
+        }
+    }
+
+    fun showBreakNotification(context: Context, id: Int, title: String, body: String, snoozeMinutes: Int = 10): Boolean {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            val hasPermission = ContextCompat.checkSelfPermission(
+                context,
+                android.Manifest.permission.POST_NOTIFICATIONS
+            ) == android.content.pm.PackageManager.PERMISSION_GRANTED
+            if (!hasPermission) {
+                Log.w(TAG, "POST_NOTIFICATIONS permission not granted; cannot display break notification")
+                NativeLifecycleDiagnostics.record(context, "BREAK_NOTIFICATION_SKIPPED_PERMISSION_DENIED", mapOf(
+                    "id" to id,
+                    "title" to title
+                ))
+                return false
+            }
+        }
+
+        createBreakReminderChannel(context)
+
+        val intent = Intent(context, MainActivity::class.java).apply {
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
+        }
+        val pendingIntent = PendingIntent.getActivity(
+            context,
+            id,
+            intent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+
+        // PendingIntent for Snooze Action
+        val snoozeIntent = Intent(context, BreakActionReceiver::class.java).apply {
+            action = BreakActionReceiver.ACTION_SNOOZE
+            putExtra(BreakActionReceiver.EXTRA_NOTIFICATION_ID, id)
+            putExtra(BreakActionReceiver.EXTRA_SNOOZE_MINUTES, snoozeMinutes)
+        }
+        val snoozePendingIntent = PendingIntent.getBroadcast(
+            context,
+            id * 10 + 1,
+            snoozeIntent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+
+        // PendingIntent for Dismiss Action
+        val dismissIntent = Intent(context, BreakActionReceiver::class.java).apply {
+            action = BreakActionReceiver.ACTION_DISMISS
+            putExtra(BreakActionReceiver.EXTRA_NOTIFICATION_ID, id)
+        }
+        val dismissPendingIntent = PendingIntent.getBroadcast(
+            context,
+            id * 10 + 2,
+            dismissIntent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+
+        val notification = NotificationCompat.Builder(context, BREAK_REMINDER_CHANNEL_ID)
+            .setSmallIcon(android.R.drawable.ic_dialog_info)
+            .setContentTitle(title)
+            .setContentText(body)
+            .setStyle(NotificationCompat.BigTextStyle().bigText(body))
+            .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .setCategory(NotificationCompat.CATEGORY_REMINDER)
+            .setAutoCancel(true)
+            .setContentIntent(pendingIntent)
+            .setDeleteIntent(dismissPendingIntent)
+            .addAction(
+                android.R.drawable.ic_lock_idle_alarm,
+                "Snooze (${snoozeMinutes}m)",
+                snoozePendingIntent
+            )
+            .addAction(
+                android.R.drawable.ic_menu_close_clear_cancel,
+                "Dismiss",
+                dismissPendingIntent
+            )
+            .build()
+
+        val notificationManager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        notificationManager.notify(id, notification)
+
+        NativeLifecycleDiagnostics.record(context, "BREAK_NOTIFICATION_POSTED", mapOf(
+            "id" to id,
+            "title" to title,
+            "body" to body,
+            "snoozeMinutes" to snoozeMinutes
+        ))
+        return true
+    }
+
+    fun handleBreakAction(context: Context, action: String, id: Int, snoozeMinutes: Int = 10) {
+        cancelBreakNotification(context, id)
+        NativeLifecycleDiagnostics.record(context, "BREAK_NOTIFICATION_ACTION_CLICKED", mapOf(
+            "action" to action,
+            "id" to id,
+            "snoozeMinutes" to snoozeMinutes
+        ))
+
+        val payload = mapOf(
+            "type" to "BREAK_ACTION",
+            "action" to action,
+            "id" to id,
+            "snoozeMinutes" to snoozeMinutes,
+            "timestamp" to System.currentTimeMillis()
+        )
+
+        mainHandler.post {
+            val sink = eventSink
+            if (sink != null) {
+                sink.success(payload)
+            } else {
+                synchronized(pendingEvents) {
+                    if (pendingEvents.size >= 100) pendingEvents.removeFirst()
+                    pendingEvents.addLast(payload)
+                }
+            }
+        }
+    }
+
+    fun cancelBreakNotification(context: Context, id: Int) {
+        try {
+            val notificationManager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+            notificationManager.cancel(id)
+            NativeLifecycleDiagnostics.record(context, "BREAK_NOTIFICATION_CANCELLED", mapOf("id" to id))
+        } catch (_: Exception) {}
+    }
+
+    fun cancelAllBreakNotifications(context: Context) {
+        cancelBreakNotification(context, BREAK_SOON_NOTIFICATION_ID)
+        cancelBreakNotification(context, BREAK_RECOMMENDED_NOTIFICATION_ID)
     }
 
     fun checkAllPermissions(context: Context): Map<String, Boolean> {

@@ -37,6 +37,7 @@ class MainActivity : FlutterActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        AudioMonitorBridge.syncCompanionDevicePresence(this)
         handleStartupIntent(intent)
     }
 
@@ -45,11 +46,19 @@ class MainActivity : FlutterActivity() {
         handleStartupIntent(intent)
     }
 
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode == AudioMonitorBridge.COMPANION_ASSOCIATION_REQUEST_CODE) {
+            Log.i(TAG, "Companion association request completed with result: $resultCode")
+            AudioMonitorBridge.syncCompanionDevicePresence(this)
+        }
+    }
+
     private fun handleStartupIntent(intent: Intent?) {
         if (intent?.getBooleanExtra("auto_start_monitoring", false) == true) {
             val deviceName = intent.getStringExtra("device_name") ?: "Bluetooth Audio Device"
             Log.i(TAG, "Activity launched with auto_start_monitoring from notification for $deviceName")
-            AudioMonitorBridge.handleBluetoothConnected(this, deviceName, "")
+            AudioMonitorBridge.handleBluetoothConnected(this, deviceName, "", "app_launch")
         }
     }
 
