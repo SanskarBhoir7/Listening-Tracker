@@ -50,7 +50,9 @@ class _BreakSettingsViewState extends State<BreakSettingsView> {
         _enabled = settings.enabled;
         _intervalMinutes = settings.intervalMinutes;
         _snoozeMinutes = settings.snoozeMinutes;
-        _isCustomInterval = !BreakReminderSettings.quickIntervals.contains(_intervalMinutes);
+        _isCustomInterval = !BreakReminderSettings.quickIntervals.contains(
+          _intervalMinutes,
+        );
         if (_isCustomInterval) {
           _customController.text = _intervalMinutes.toString();
         }
@@ -87,7 +89,8 @@ class _BreakSettingsViewState extends State<BreakSettingsView> {
     if (parsed < BreakReminderSettings.minIntervalMinutes ||
         parsed > BreakReminderSettings.maxIntervalMinutes) {
       setState(() {
-        _customError = 'Must be between ${BreakReminderSettings.minIntervalMinutes} and ${BreakReminderSettings.maxIntervalMinutes} minutes';
+        _customError =
+            'Must be between ${BreakReminderSettings.minIntervalMinutes} and ${BreakReminderSettings.maxIntervalMinutes} minutes';
       });
       return;
     }
@@ -171,7 +174,9 @@ class _BreakSettingsViewState extends State<BreakSettingsView> {
               shape: RoundedRectangleBorder(
                 borderRadius: BorderRadius.circular(12),
                 side: BorderSide(
-                  color: _enabled ? Colors.tealAccent.withValues(alpha: 0.5) : Colors.white12,
+                  color: _enabled
+                      ? Colors.tealAccent.withValues(alpha: 0.5)
+                      : Colors.white12,
                 ),
               ),
               child: SwitchListTile(
@@ -185,7 +190,10 @@ class _BreakSettingsViewState extends State<BreakSettingsView> {
                 activeThumbColor: Colors.tealAccent,
                 title: const Text(
                   'Enable Break Reminders',
-                  style: TextStyle(fontWeight: FontWeight.bold, color: Colors.white),
+                  style: TextStyle(
+                    fontWeight: FontWeight.bold,
+                    color: Colors.white,
+                  ),
                 ),
                 subtitle: Text(
                   _enabled
@@ -218,31 +226,43 @@ class _BreakSettingsViewState extends State<BreakSettingsView> {
                     const SizedBox(height: 4),
                     Text(
                       'Duration of continuous active audio playback before reminding you to rest.',
-                      style: TextStyle(fontSize: 12, color: Colors.grey.shade400),
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: Colors.grey.shade400,
+                      ),
                     ),
                     const SizedBox(height: 12),
 
                     // Quick Chips & Custom
                     Wrap(
-                      spacing: 8,
-                      runSpacing: 8,
+                      spacing: 10,
+                      runSpacing: 10,
                       children: [
                         ...BreakReminderSettings.quickIntervals.map((mins) {
-                          final isSelected = !_isCustomInterval && _intervalMinutes == mins;
+                          final isSelected =
+                              !_isCustomInterval && _intervalMinutes == mins;
                           return ChoiceChip(
                             key: Key('interval_chip_$mins'),
                             label: Text(
                               mins == 45 ? '$mins min (Default)' : '$mins min',
+                              softWrap: false,
                               style: TextStyle(
-                                fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
+                                fontWeight: isSelected
+                                    ? FontWeight.bold
+                                    : FontWeight.normal,
                                 color: isSelected ? Colors.black : Colors.white,
                               ),
                             ),
                             selected: isSelected,
+                            visualDensity: VisualDensity.compact,
+                            materialTapTargetSize:
+                                MaterialTapTargetSize.shrinkWrap,
                             selectedColor: Colors.tealAccent,
                             backgroundColor: Colors.grey.shade900,
                             side: BorderSide(
-                              color: isSelected ? Colors.tealAccent : Colors.white24,
+                              color: isSelected
+                                  ? Colors.tealAccent
+                                  : Colors.white24,
                             ),
                             onSelected: (selected) {
                               if (selected) _onIntervalSelected(mins);
@@ -252,17 +272,29 @@ class _BreakSettingsViewState extends State<BreakSettingsView> {
                         ChoiceChip(
                           key: const Key('interval_chip_custom'),
                           label: Text(
-                            _isCustomInterval ? 'Custom: $_intervalMinutes min' : 'Custom',
+                            _isCustomInterval
+                                ? 'Custom: $_intervalMinutes min'
+                                : 'Custom',
+                            softWrap: false,
                             style: TextStyle(
-                              fontWeight: _isCustomInterval ? FontWeight.bold : FontWeight.normal,
-                              color: _isCustomInterval ? Colors.black : Colors.white,
+                              fontWeight: _isCustomInterval
+                                  ? FontWeight.bold
+                                  : FontWeight.normal,
+                              color: _isCustomInterval
+                                  ? Colors.black
+                                  : Colors.white,
                             ),
                           ),
                           selected: _isCustomInterval,
+                          visualDensity: VisualDensity.compact,
+                          materialTapTargetSize:
+                              MaterialTapTargetSize.shrinkWrap,
                           selectedColor: Colors.tealAccent,
                           backgroundColor: Colors.grey.shade900,
                           side: BorderSide(
-                            color: _isCustomInterval ? Colors.tealAccent : Colors.white24,
+                            color: _isCustomInterval
+                                ? Colors.tealAccent
+                                : Colors.white24,
                           ),
                           onSelected: (selected) {
                             if (selected) _onCustomSelected();
@@ -277,7 +309,9 @@ class _BreakSettingsViewState extends State<BreakSettingsView> {
                         key: const Key('custom_interval_field'),
                         controller: _customController,
                         keyboardType: TextInputType.number,
-                        inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+                        inputFormatters: [
+                          FilteringTextInputFormatter.digitsOnly,
+                        ],
                         style: const TextStyle(color: Colors.white),
                         decoration: InputDecoration(
                           labelText: 'Custom Interval (Minutes)',
@@ -286,7 +320,9 @@ class _BreakSettingsViewState extends State<BreakSettingsView> {
                           helperStyle: TextStyle(color: Colors.grey.shade400),
                           errorText: _customError,
                           suffixText: 'min',
-                          suffixStyle: const TextStyle(color: Colors.tealAccent),
+                          suffixStyle: const TextStyle(
+                            color: Colors.tealAccent,
+                          ),
                           filled: true,
                           fillColor: Colors.grey.shade900,
                           border: OutlineInputBorder(
@@ -295,10 +331,49 @@ class _BreakSettingsViewState extends State<BreakSettingsView> {
                           ),
                           focusedBorder: OutlineInputBorder(
                             borderRadius: BorderRadius.circular(8),
-                            borderSide: const BorderSide(color: Colors.tealAccent),
+                            borderSide: const BorderSide(
+                              color: Colors.tealAccent,
+                            ),
                           ),
                         ),
                         onChanged: _validateCustom,
+                      ),
+                    ],
+
+                    if (_intervalGuidance case final guidance?) ...[
+                      const SizedBox(height: 12),
+                      Container(
+                        key: const Key('break_interval_guidance'),
+                        width: double.infinity,
+                        padding: const EdgeInsets.all(12),
+                        decoration: BoxDecoration(
+                          color: Colors.teal.shade900.withValues(alpha: 0.28),
+                          borderRadius: BorderRadius.circular(10),
+                          border: Border.all(
+                            color: Colors.tealAccent.withValues(alpha: 0.35),
+                          ),
+                        ),
+                        child: Row(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            const Icon(
+                              Icons.info_outline,
+                              color: Colors.tealAccent,
+                              size: 18,
+                            ),
+                            const SizedBox(width: 8),
+                            Expanded(
+                              child: Text(
+                                guidance,
+                                style: TextStyle(
+                                  color: Colors.grey.shade200,
+                                  fontSize: 12,
+                                  height: 1.35,
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
                       ),
                     ],
 
@@ -317,28 +392,40 @@ class _BreakSettingsViewState extends State<BreakSettingsView> {
                     const SizedBox(height: 4),
                     Text(
                       'When snoozing from the notification or app, delay the next reminder by:',
-                      style: TextStyle(fontSize: 12, color: Colors.grey.shade400),
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: Colors.grey.shade400,
+                      ),
                     ),
                     const SizedBox(height: 12),
 
                     Wrap(
                       spacing: 8,
+                      runSpacing: 8,
                       children: BreakReminderSettings.snoozeChoices.map((mins) {
                         final isSelected = _snoozeMinutes == mins;
                         return ChoiceChip(
                           key: Key('snooze_chip_$mins'),
                           label: Text(
                             mins == 10 ? '$mins min (Default)' : '$mins min',
+                            softWrap: false,
                             style: TextStyle(
-                              fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
+                              fontWeight: isSelected
+                                  ? FontWeight.bold
+                                  : FontWeight.normal,
                               color: isSelected ? Colors.black : Colors.white,
                             ),
                           ),
                           selected: isSelected,
+                          visualDensity: VisualDensity.compact,
+                          materialTapTargetSize:
+                              MaterialTapTargetSize.shrinkWrap,
                           selectedColor: Colors.amberAccent.shade400,
                           backgroundColor: Colors.grey.shade900,
                           side: BorderSide(
-                            color: isSelected ? Colors.amberAccent : Colors.white24,
+                            color: isSelected
+                                ? Colors.amberAccent
+                                : Colors.white24,
                           ),
                           onSelected: (selected) {
                             if (selected) {
@@ -367,15 +454,21 @@ class _BreakSettingsViewState extends State<BreakSettingsView> {
                           children: [
                             Row(
                               children: [
-                                Icon(Icons.preview_outlined, color: Colors.tealAccent.shade400, size: 18),
+                                Icon(
+                                  Icons.preview_outlined,
+                                  color: Colors.tealAccent.shade400,
+                                  size: 18,
+                                ),
                                 const SizedBox(width: 8),
-                                const Text(
-                                  'RULE BEHAVIOR PREVIEW',
-                                  style: TextStyle(
-                                    fontWeight: FontWeight.bold,
-                                    fontSize: 12,
-                                    letterSpacing: 1.0,
-                                    color: Colors.white,
+                                const Expanded(
+                                  child: Text(
+                                    'RULE BEHAVIOR PREVIEW',
+                                    style: TextStyle(
+                                      fontWeight: FontWeight.bold,
+                                      fontSize: 12,
+                                      letterSpacing: 1.0,
+                                      color: Colors.white,
+                                    ),
                                   ),
                                 ),
                               ],
@@ -385,21 +478,24 @@ class _BreakSettingsViewState extends State<BreakSettingsView> {
                               icon: Icons.notifications_active_outlined,
                               color: Colors.amberAccent.shade400,
                               title: 'First Alert (Break Soon)',
-                              description: 'Triggers at $_intervalMinutes minutes of active listening.',
+                              description:
+                                  'Triggers at $_intervalMinutes minutes of active listening.',
                             ),
                             const SizedBox(height: 10),
                             _buildPreviewRow(
                               icon: Icons.warning_amber_rounded,
                               color: Colors.deepOrangeAccent.shade200,
                               title: 'Urgent Alert (Break Due)',
-                              description: 'Triggers at ${_intervalMinutes + 15} minutes if playback continues.',
+                              description:
+                                  'Triggers at ${_intervalMinutes + 15} minutes if playback continues.',
                             ),
                             const SizedBox(height: 10),
                             _buildPreviewRow(
                               icon: Icons.snooze,
                               color: Colors.lightBlueAccent,
                               title: 'Notification Snooze',
-                              description: 'Suppresses alerts for $_snoozeMinutes minutes of continuous listening.',
+                              description:
+                                  'Suppresses alerts for $_snoozeMinutes minutes of continuous listening.',
                             ),
                             const Divider(color: Colors.white12, height: 20),
                             Text(
@@ -407,7 +503,11 @@ class _BreakSettingsViewState extends State<BreakSettingsView> {
                               '• Bluetooth connection without audio never increments break time.\n'
                               '• Pauses within the 3-minute grace period preserve session continuity without adding listening time.\n'
                               '• Disconnecting audio peripherals immediately cancels all reminders and resets continuous time to zero.',
-                              style: TextStyle(fontSize: 11, color: Colors.grey.shade400, height: 1.4),
+                              style: TextStyle(
+                                fontSize: 12,
+                                color: Colors.grey.shade300,
+                                height: 1.55,
+                              ),
                             ),
                           ],
                         ),
@@ -436,7 +536,10 @@ class _BreakSettingsViewState extends State<BreakSettingsView> {
                 icon: const Icon(Icons.check, size: 20),
                 label: const Text(
                   'SAVE SETTINGS',
-                  style: TextStyle(fontWeight: FontWeight.bold, letterSpacing: 1.0),
+                  style: TextStyle(
+                    fontWeight: FontWeight.bold,
+                    letterSpacing: 1.0,
+                  ),
                 ),
                 onPressed: _saveSettings,
               ),
@@ -453,35 +556,65 @@ class _BreakSettingsViewState extends State<BreakSettingsView> {
     required String title,
     required String description,
   }) {
-    return Row(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Icon(icon, color: color, size: 16),
-        const SizedBox(width: 8),
-        Expanded(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                title,
-                style: TextStyle(
-                  fontWeight: FontWeight.bold,
-                  fontSize: 12,
-                  color: color,
-                ),
-              ),
-              const SizedBox(height: 2),
-              Text(
-                description,
-                style: TextStyle(
-                  fontSize: 11,
-                  color: Colors.grey.shade300,
-                ),
-              ),
-            ],
+    return Container(
+      padding: const EdgeInsets.all(10),
+      decoration: BoxDecoration(
+        color: Colors.black.withValues(alpha: 0.16),
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Container(
+            width: 30,
+            height: 30,
+            alignment: Alignment.center,
+            decoration: BoxDecoration(
+              color: color.withValues(alpha: 0.12),
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: Icon(icon, color: color, size: 17),
           ),
-        ),
-      ],
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  title,
+                  style: TextStyle(
+                    fontWeight: FontWeight.bold,
+                    fontSize: 13,
+                    color: color,
+                  ),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  description,
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: Colors.grey.shade300,
+                    height: 1.4,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
     );
+  }
+
+  String? get _intervalGuidance {
+    if (_intervalMinutes > 60) {
+      return 'A longer interval delays your reminder. Consider 45–60 minutes for more regular prompts; you can still save your chosen interval.';
+    }
+    if (_intervalMinutes >= 60) {
+      return 'At 60 minutes, consider taking a short break when your reminder appears.';
+    }
+    if (_intervalMinutes >= 45) {
+      return 'Around 45 minutes, consider taking a break soon when your reminder appears.';
+    }
+    return null;
   }
 }

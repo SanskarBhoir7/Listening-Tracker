@@ -1,5 +1,6 @@
 import 'dart:convert';
 
+import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:listening_tracker/database/database_adapter.dart';
 import 'package:listening_tracker/database/database_helper.dart';
@@ -7,8 +8,41 @@ import 'package:listening_tracker/models/connection_record.dart';
 import 'package:listening_tracker/models/diagnostic_event.dart';
 import 'package:listening_tracker/models/listening_session.dart';
 import 'package:listening_tracker/services/diagnostic_logger.dart';
+import 'package:listening_tracker/views/diagnostic_log_viewer.dart';
 
 void main() {
+  testWidgets('long diagnostic event badges stay within the screen width', (
+    tester,
+  ) async {
+    final database = InMemoryDatabaseAdapter();
+    final timestamp = DateTime.now().millisecondsSinceEpoch;
+    await database.saveDiagnosticEvent(
+      DiagnosticEvent(
+        id: 'long-event',
+        timestamp: timestamp,
+        timestampIso: DateTime.fromMillisecondsSinceEpoch(timestamp)
+            .toIso8601String(),
+        eventType: 'NATIVE_DEVICE_CALLBACK_REGISTERED_WITH_LONG_EVENT_NAME',
+        source: 'native',
+      ),
+    );
+    tester.view.physicalSize = const Size(360, 800);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+
+    await tester.pumpWidget(
+      MaterialApp(home: DiagnosticLogViewer(database: database)),
+    );
+    await tester.pumpAndSettle();
+
+    expect(tester.takeException(), isNull);
+    final badge = tester.getRect(
+      find.text('NATIVE_DEVICE_CALLBACK_REGISTERED_WITH_LONG_EVENT_NAME'),
+    );
+    expect(badge.right, lessThanOrEqualTo(360));
+    expect(find.byType(SingleChildScrollView), findsWidgets);
+  });
+
   group('DiagnosticEvent Model Tests', () {
     test('serialization roundtrip preserves all fields including signals', () {
       final now = DateTime.now();
@@ -295,20 +329,31 @@ void main() {
       expect(recursiveAdapter.attemptedWrites, equals(1));
     });
 
-    test('rapid concurrent logEvent calls are all persisted without dropping', () async {
-      final results = await Future.wait([
-        logger.logEvent(eventType: 'EVENT_A', source: 'native'),
-        logger.logEvent(eventType: 'EVENT_B', source: 'native'),
-        logger.logEvent(eventType: 'AUDIO_STARTED', source: 'native'),
-        logger.logEvent(eventType: 'LISTENING_STARTED', source: 'flutter'),
-      ]);
+    test(
+      'rapid concurrent logEvent calls are all persisted without dropping',
+      () async {
+        final results = await Future.wait([
+          logger.logEvent(eventType: 'EVENT_A', source: 'native'),
+          logger.logEvent(eventType: 'EVENT_B', source: 'native'),
+          logger.logEvent(eventType: 'AUDIO_STARTED', source: 'native'),
+          logger.logEvent(eventType: 'LISTENING_STARTED', source: 'flutter'),
+        ]);
 
-      expect(results.every((r) => r != null), isTrue);
-      final inDb = await adapter.getDiagnosticEvents();
-      expect(inDb.length, equals(4));
-      final types = inDb.map((e) => e.eventType).toSet();
-      expect(types, containsAll(['EVENT_A', 'EVENT_B', 'AUDIO_STARTED', 'LISTENING_STARTED']));
-    });
+        expect(results.every((r) => r != null), isTrue);
+        final inDb = await adapter.getDiagnosticEvents();
+        expect(inDb.length, equals(4));
+        final types = inDb.map((e) => e.eventType).toSet();
+        expect(
+          types,
+          containsAll([
+            'EVENT_A',
+            'EVENT_B',
+            'AUDIO_STARTED',
+            'LISTENING_STARTED',
+          ]),
+        );
+      },
+    );
 
     test('exportEventsAsJson outputs valid JSON array', () async {
       await logger.logEvent(

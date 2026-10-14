@@ -56,6 +56,7 @@ class BreakEngine {
 
   // Debug-only simulated duration offset (guarded strictly by kDebugMode)
   Duration _debugSimulatedOffset = Duration.zero;
+  Duration _lastActualListeningDuration = Duration.zero;
 
   Duration get debugSimulatedOffset => _debugSimulatedOffset;
 
@@ -95,14 +96,26 @@ class BreakEngine {
   /// Updates the engine configuration dynamically when user settings change.
   /// Re-evaluates active notifications and state immediately without stale timers.
   Future<void> updateConfig(BreakRuleConfig newConfig) async {
+    final thresholdsChanged =
+        newConfig.breakSoonThreshold != _config.breakSoonThreshold ||
+        newConfig.breakRecommendedThreshold !=
+            _config.breakRecommendedThreshold;
+    final enabledChanged = newConfig.enabled != _config.enabled;
+    if (thresholdsChanged || enabledChanged) {
+      // Notification deduplication belongs to the configuration that produced
+      // the old thresholds. Let the newly configured thresholds notify once.
+      _notifiedBreakSoon = false;
+      _notifiedBreakRecommended = false;
+      _dismissedStatuses.clear();
+    }
     _config = newConfig;
-    if (!_config.enabled) {
+    if (!_config.enabled || thresholdsChanged) {
       try {
         await notificationService.cancelAllBreakNotifications();
       } catch (_) {}
     }
     await update(
-      continuousListeningDuration: _state.continuousListeningDuration,
+      continuousListeningDuration: _lastActualListeningDuration,
       isAudioPlaying: _state.isAudioPlaying,
       isInGracePeriod: _state.isInGracePeriod,
     );
@@ -131,12 +144,16 @@ class BreakEngine {
         'snoozeMinutes': snoozeDur.inMinutes,
         'continuousListeningSeconds':
             _state.continuousListeningDuration.inSeconds,
+        'isSimulated': _state.isSimulated,
+        'actualContinuousListeningSeconds':
+            _lastActualListeningDuration.inSeconds,
+        'simulatedOffsetSeconds': _debugSimulatedOffset.inSeconds,
         'snoozedUntilSeconds': _snoozedUntilContinuousDuration!.inSeconds,
       },
     );
 
     await update(
-      continuousListeningDuration: _state.continuousListeningDuration,
+      continuousListeningDuration: _lastActualListeningDuration,
       isAudioPlaying: _state.isAudioPlaying,
       isInGracePeriod: _state.isInGracePeriod,
     );
@@ -164,11 +181,15 @@ class BreakEngine {
         'notificationId': notificationId,
         'continuousListeningSeconds':
             _state.continuousListeningDuration.inSeconds,
+        'isSimulated': _state.isSimulated,
+        'actualContinuousListeningSeconds':
+            _lastActualListeningDuration.inSeconds,
+        'simulatedOffsetSeconds': _debugSimulatedOffset.inSeconds,
       },
     );
 
     await update(
-      continuousListeningDuration: _state.continuousListeningDuration,
+      continuousListeningDuration: _lastActualListeningDuration,
       isAudioPlaying: _state.isAudioPlaying,
       isInGracePeriod: _state.isInGracePeriod,
     );
@@ -182,6 +203,7 @@ class BreakEngine {
     required bool isInGracePeriod,
     AudioDevice? activeDevice,
   }) async {
+    _lastActualListeningDuration = continuousListeningDuration;
     final isSimulated = kDebugMode && _debugSimulatedOffset > Duration.zero;
     final effectiveDuration = isSimulated
         ? continuousListeningDuration + _debugSimulatedOffset
@@ -407,6 +429,7 @@ class BreakEngine {
     _snoozedUntilContinuousDuration = null;
     _dismissedStatuses.clear();
     _debugSimulatedOffset = Duration.zero;
+    _lastActualListeningDuration = Duration.zero;
     _state = BreakState.initial(_config);
     try {
       await notificationService.cancelAllBreakNotifications();

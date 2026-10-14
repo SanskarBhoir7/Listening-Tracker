@@ -160,6 +160,56 @@ void main() {
       expect(notificationService.shownNotifications.length, 1);
     });
 
+    test('Changing an interval replaces old notification deduplication thresholds', () async {
+      await breakEngine.update(
+        continuousListeningDuration: const Duration(minutes: 45),
+        isAudioPlaying: true,
+        isInGracePeriod: false,
+        activeDevice: testDevice,
+      );
+      expect(notificationService.shownNotifications.length, 1);
+
+      await breakEngine.updateConfig(
+        const BreakRuleConfig(
+          enabled: true,
+          breakSoonThreshold: Duration(minutes: 60),
+          breakRecommendedThreshold: Duration(minutes: 75),
+        ),
+      );
+      await breakEngine.update(
+        continuousListeningDuration: const Duration(minutes: 60),
+        isAudioPlaying: true,
+        isInGracePeriod: false,
+        activeDevice: testDevice,
+      );
+
+      expect(breakEngine.state.status, BreakStatus.breakSoon);
+      expect(notificationService.shownNotifications.length, 1);
+      expect(notificationService.shownNotifications.last['id'], 3001);
+    });
+
+    test('Re-enabling reminders can notify at the active threshold again', () async {
+      await breakEngine.update(
+        continuousListeningDuration: const Duration(minutes: 45),
+        isAudioPlaying: true,
+        isInGracePeriod: false,
+        activeDevice: testDevice,
+      );
+      await breakEngine.updateConfig(
+        const BreakRuleConfig(enabled: false),
+      );
+      await breakEngine.updateConfig(
+        const BreakRuleConfig(
+          enabled: true,
+          breakSoonThreshold: Duration(minutes: 45),
+          breakRecommendedThreshold: Duration(minutes: 60),
+        ),
+      );
+
+      expect(notificationService.shownNotifications.length, 1);
+      expect(notificationService.shownNotifications.single['id'], 3001);
+    });
+
     test('Snooze suppresses notifications until snooze duration elapses', () async {
       // Reach threshold at 45m
       await breakEngine.update(
@@ -415,6 +465,27 @@ void main() {
       expect(find.byKey(const Key('snooze_chip_5')), findsOneWidget);
       expect(find.byKey(const Key('snooze_chip_10')), findsOneWidget);
       expect(find.byKey(const Key('snooze_chip_15')), findsOneWidget);
+    });
+
+    testWidgets('Shows contextual interval guidance without blocking long choices', (tester) async {
+      await tester.pumpWidget(
+        MaterialApp(
+          home: BreakSettingsView(sessionEngine: sessionEngine),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(find.textContaining('Around 45 minutes'), findsOneWidget);
+      await tester.tap(find.byKey(const Key('interval_chip_60')));
+      await tester.pumpAndSettle();
+      expect(find.textContaining('At 60 minutes'), findsOneWidget);
+
+      await tester.tap(find.byKey(const Key('interval_chip_custom')));
+      await tester.pumpAndSettle();
+      await tester.enterText(find.byKey(const Key('custom_interval_field')), '90');
+      await tester.pumpAndSettle();
+      expect(find.textContaining('A longer interval delays'), findsOneWidget);
+      expect(find.byKey(const Key('save_break_settings_primary_button')), findsOneWidget);
     });
 
     testWidgets('Selecting quick interval updates state and saves to engine', (tester) async {

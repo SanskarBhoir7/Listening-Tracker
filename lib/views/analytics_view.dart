@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+
 import '../database/database_adapter.dart';
 import '../models/daily_trend_point.dart';
 import '../models/device_usage_stats.dart';
@@ -13,10 +14,7 @@ enum AnalyticsPeriod { today, last7Days, last30Days }
 class AnalyticsView extends StatefulWidget {
   final DatabaseAdapter database;
 
-  const AnalyticsView({
-    super.key,
-    required this.database,
-  });
+  const AnalyticsView({super.key, required this.database});
 
   @override
   State<AnalyticsView> createState() => AnalyticsViewState();
@@ -90,13 +88,22 @@ class AnalyticsViewState extends State<AnalyticsView> {
     final comparison = AnalyticsCalculator.comparePeriods(stats, prevStats);
 
     // 2. Fetch device stats
-    final rawDeviceStats = await widget.database.getDeviceUsageStats(rangeStart, todayEnd);
+    final rawDeviceStats = await widget.database.getDeviceUsageStats(
+      rangeStart,
+      todayEnd,
+    );
     final sortedDevices = AnalyticsCalculator.sortDeviceUsage(rawDeviceStats);
     final mostUsed = AnalyticsCalculator.findMostUsedDevice(sortedDevices);
 
     // 3. Fetch trend records
-    final sessions = await widget.database.getDeviceSessionsForDateRange(rangeStart, todayEnd);
-    final connections = await widget.database.getConnectionRecordsForDateRange(rangeStart, todayEnd);
+    final sessions = await widget.database.getDeviceSessionsForDateRange(
+      rangeStart,
+      todayEnd,
+    );
+    final connections = await widget.database.getConnectionRecordsForDateRange(
+      rangeStart,
+      todayEnd,
+    );
     final trends = AnalyticsCalculator.buildDailyTrends(
       startDate: rangeStart,
       endDate: todayEnd,
@@ -118,8 +125,18 @@ class AnalyticsViewState extends State<AnalyticsView> {
 
   String _formatDateShort(DateTime dt) {
     final months = [
-      'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
-      'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'
+      'Jan',
+      'Feb',
+      'Mar',
+      'Apr',
+      'May',
+      'Jun',
+      'Jul',
+      'Aug',
+      'Sep',
+      'Oct',
+      'Nov',
+      'Dec',
     ];
     final weekdays = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
     return '${weekdays[dt.weekday - 1]}, ${months[dt.month - 1]} ${dt.day}';
@@ -181,7 +198,8 @@ class AnalyticsViewState extends State<AnalyticsView> {
   }
 
   Widget _buildPeriodSummaryCard() {
-    final stats = _periodStats ?? PeriodStats.empty(DateTime.now(), DateTime.now());
+    final stats =
+        _periodStats ?? PeriodStats.empty(DateTime.now(), DateTime.now());
     final comparison = _comparison;
 
     return Card(
@@ -207,7 +225,10 @@ class AnalyticsViewState extends State<AnalyticsView> {
                 ),
                 if (comparison != null && !comparison.isListeningEqual)
                   Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 8,
+                      vertical: 3,
+                    ),
                     decoration: BoxDecoration(
                       color: comparison.isListeningIncreased
                           ? Colors.green.shade900.withValues(alpha: 0.4)
@@ -234,11 +255,36 @@ class AnalyticsViewState extends State<AnalyticsView> {
               ],
             ),
             const Divider(height: 16),
-            _buildMetricRow(
-              'Total Listening Time',
-              stats.totalListeningFormatted,
-              valueColor: Colors.greenAccent,
-              isBold: true,
+            Container(
+              width: double.infinity,
+              margin: const EdgeInsets.only(bottom: 8),
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: Colors.teal.shade900.withValues(alpha: 0.32),
+                borderRadius: BorderRadius.circular(10),
+                border: Border.all(
+                  color: Colors.tealAccent.withValues(alpha: 0.25),
+                ),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'Total Listening Time',
+                    style: TextStyle(fontSize: 12, color: Colors.grey.shade300),
+                  ),
+                  const SizedBox(height: 3),
+                  Text(
+                    stats.totalListeningFormatted,
+                    style: const TextStyle(
+                      fontSize: 24,
+                      fontWeight: FontWeight.bold,
+                      color: Colors.greenAccent,
+                      fontFeatures: [FontFeature.tabularFigures()],
+                    ),
+                  ),
+                ],
+              ),
             ),
             _buildMetricRow(
               'Total Bluetooth Time',
@@ -250,14 +296,8 @@ class AnalyticsViewState extends State<AnalyticsView> {
               '${(stats.listeningRatio * 100).toStringAsFixed(1)}%',
               valueColor: Colors.tealAccent,
             ),
-            _buildMetricRow(
-              'Listening Sessions',
-              '${stats.sessionCount}',
-            ),
-            _buildMetricRow(
-              'Average Session',
-              stats.averageSessionFormatted,
-            ),
+            _buildMetricRow('Listening Sessions', '${stats.sessionCount}'),
+            _buildMetricRow('Average Session', stats.averageSessionFormatted),
             _buildMetricRow(
               'Longest Session',
               stats.longestSessionFormatted,
@@ -266,7 +306,9 @@ class AnalyticsViewState extends State<AnalyticsView> {
             _buildMetricRow(
               'Most-Used Device',
               _mostUsedDevice?.deviceName ?? 'None',
-              valueColor: _mostUsedDevice != null ? Colors.white : Colors.grey.shade500,
+              valueColor: _mostUsedDevice != null
+                  ? Colors.white
+                  : Colors.grey.shade500,
             ),
           ],
         ),
@@ -374,9 +416,14 @@ class AnalyticsViewState extends State<AnalyticsView> {
                           ),
                           if (isConnOnly)
                             Container(
-                              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 6,
+                                vertical: 2,
+                              ),
                               decoration: BoxDecoration(
-                                color: Colors.amber.shade900.withValues(alpha: 0.4),
+                                color: Colors.amber.shade900.withValues(
+                                  alpha: 0.4,
+                                ),
                                 borderRadius: BorderRadius.circular(4),
                               ),
                               child: const Text(
@@ -391,87 +438,46 @@ class AnalyticsViewState extends State<AnalyticsView> {
                         ],
                       ),
                       const SizedBox(height: 8),
-                      Row(
+                      Column(
                         children: [
-                          Expanded(
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Text(
+                          Row(
+                            children: [
+                              Expanded(
+                                child: _buildDeviceMetric(
                                   'Listening',
-                                  style: TextStyle(fontSize: 10, color: Colors.grey.shade400),
-                                ),
-                                const SizedBox(height: 2),
-                                Text(
                                   dev.totalListeningFormatted,
-                                  style: const TextStyle(
-                                    fontSize: 12,
-                                    fontWeight: FontWeight.bold,
-                                    color: Colors.greenAccent,
-                                  ),
+                                  Colors.greenAccent,
                                 ),
-                              ],
-                            ),
-                          ),
-                          Expanded(
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Text(
+                              ),
+                              const SizedBox(width: 10),
+                              Expanded(
+                                child: _buildDeviceMetric(
                                   'Connected',
-                                  style: TextStyle(fontSize: 10, color: Colors.grey.shade400),
-                                ),
-                                const SizedBox(height: 2),
-                                Text(
                                   dev.totalConnectedFormatted,
-                                  style: TextStyle(
-                                    fontSize: 12,
-                                    fontWeight: FontWeight.bold,
-                                    color: Colors.cyanAccent.shade100,
-                                  ),
+                                  Colors.cyanAccent.shade100,
                                 ),
-                              ],
-                            ),
+                              ),
+                            ],
                           ),
-                          Expanded(
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Text(
+                          const SizedBox(height: 8),
+                          Row(
+                            children: [
+                              Expanded(
+                                child: _buildDeviceMetric(
                                   'Sessions',
-                                  style: TextStyle(fontSize: 10, color: Colors.grey.shade400),
-                                ),
-                                const SizedBox(height: 2),
-                                Text(
                                   '${dev.sessionCount}',
-                                  style: const TextStyle(
-                                    fontSize: 12,
-                                    fontWeight: FontWeight.bold,
-                                    color: Colors.white,
-                                  ),
+                                  Colors.white,
                                 ),
-                              ],
-                            ),
-                          ),
-                          Expanded(
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Text(
+                              ),
+                              const SizedBox(width: 10),
+                              Expanded(
+                                child: _buildDeviceMetric(
                                   'Ratio',
-                                  style: TextStyle(fontSize: 10, color: Colors.grey.shade400),
-                                ),
-                                const SizedBox(height: 2),
-                                Text(
                                   '${(dev.listeningRatio * 100).toStringAsFixed(0)}%',
-                                  style: const TextStyle(
-                                    fontSize: 12,
-                                    fontWeight: FontWeight.bold,
-                                    color: Colors.tealAccent,
-                                  ),
+                                  Colors.tealAccent,
                                 ),
-                              ],
-                            ),
+                              ),
+                            ],
                           ),
                         ],
                       ),
@@ -482,6 +488,32 @@ class AnalyticsViewState extends State<AnalyticsView> {
           ],
         ),
       ),
+    );
+  }
+
+  Widget _buildDeviceMetric(String label, String value, Color color) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          label,
+          maxLines: 1,
+          softWrap: false,
+          style: TextStyle(fontSize: 10, color: Colors.grey.shade400),
+        ),
+        const SizedBox(height: 2),
+        Text(
+          value,
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: TextStyle(
+            fontSize: 12,
+            fontWeight: FontWeight.bold,
+            color: color,
+            fontFeatures: const [FontFeature.tabularFigures()],
+          ),
+        ),
+      ],
     );
   }
 
@@ -517,155 +549,117 @@ class AnalyticsViewState extends State<AnalyticsView> {
                 ),
               )
             else
-              ..._dailyTrends.reversed.map((point) {
-                final dateLabel = _formatDateShort(point.date);
-                final hasActivity = point.hasActivity;
-
-                return Padding(
-                  padding: const EdgeInsets.symmetric(vertical: 6),
-                  child: LayoutBuilder(
-                    builder: (context, constraints) {
-                      if (constraints.maxWidth < 240) {
-                        return Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(
-                              dateLabel,
-                              softWrap: true,
-                              style: TextStyle(
-                                fontSize: 12,
-                                fontWeight: hasActivity ? FontWeight.bold : FontWeight.normal,
-                                color: hasActivity ? Colors.white : Colors.grey.shade500,
-                              ),
-                            ),
-                            const SizedBox(height: 2),
-                            if (!hasActivity)
-                              Text(
-                                'No activity',
-                                style: TextStyle(
-                                  fontSize: 11,
-                                  fontStyle: FontStyle.italic,
-                                  color: Colors.grey.shade600,
-                                ),
-                              )
-                            else
-                              Wrap(
-                                crossAxisAlignment: WrapCrossAlignment.center,
-                                spacing: 4,
-                                runSpacing: 2,
-                                children: [
-                                  Text(
-                                    point.listeningFormatted,
-                                    style: const TextStyle(
-                                      fontSize: 12,
-                                      fontWeight: FontWeight.bold,
-                                      color: Colors.greenAccent,
-                                    ),
-                                  ),
-                                  Text(
-                                    '/ ${point.connectedFormatted}',
-                                    style: TextStyle(
-                                      fontSize: 11,
-                                      color: Colors.cyanAccent.shade100,
-                                    ),
-                                  ),
-                                  Container(
-                                    padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
-                                    decoration: BoxDecoration(
-                                      color: Colors.teal.shade900.withValues(alpha: 0.5),
-                                      borderRadius: BorderRadius.circular(3),
-                                    ),
-                                    child: Text(
-                                      '${(point.listeningRatio * 100).toStringAsFixed(0)}%',
-                                      style: const TextStyle(
-                                        fontSize: 10,
-                                        fontWeight: FontWeight.bold,
-                                        color: Colors.tealAccent,
-                                      ),
-                                    ),
-                                  ),
-                                ],
-                              ),
-                          ],
-                        );
-                      }
-
-                      return Row(
-                        crossAxisAlignment: CrossAxisAlignment.center,
-                        children: [
-                          Flexible(
-                            flex: 4,
-                            child: Text(
-                              dateLabel,
-                              softWrap: true,
-                              style: TextStyle(
-                                fontSize: 12,
-                                fontWeight: hasActivity ? FontWeight.bold : FontWeight.normal,
-                                color: hasActivity ? Colors.white : Colors.grey.shade500,
-                              ),
-                            ),
-                          ),
-                          const SizedBox(width: 8),
-                          Expanded(
-                            flex: 6,
-                            child: Wrap(
-                              alignment: WrapAlignment.end,
-                              crossAxisAlignment: WrapCrossAlignment.center,
-                              spacing: 4,
-                              runSpacing: 2,
-                              children: [
-                                if (!hasActivity)
-                                  Text(
-                                    'No activity',
-                                    style: TextStyle(
-                                      fontSize: 11,
-                                      fontStyle: FontStyle.italic,
-                                      color: Colors.grey.shade600,
-                                    ),
-                                  )
-                                else ...[
-                                  Text(
-                                    point.listeningFormatted,
-                                    style: const TextStyle(
-                                      fontSize: 12,
-                                      fontWeight: FontWeight.bold,
-                                      color: Colors.greenAccent,
-                                    ),
-                                  ),
-                                  Text(
-                                    '/ ${point.connectedFormatted}',
-                                    style: TextStyle(
-                                      fontSize: 11,
-                                      color: Colors.cyanAccent.shade100,
-                                    ),
-                                  ),
-                                  Container(
-                                    padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
-                                    decoration: BoxDecoration(
-                                      color: Colors.teal.shade900.withValues(alpha: 0.5),
-                                      borderRadius: BorderRadius.circular(3),
-                                    ),
-                                    child: Text(
-                                      '${(point.listeningRatio * 100).toStringAsFixed(0)}%',
-                                      style: const TextStyle(
-                                        fontSize: 10,
-                                        fontWeight: FontWeight.bold,
-                                        color: Colors.tealAccent,
-                                      ),
-                                    ),
-                                  ),
-                                ],
-                              ],
-                            ),
-                          ),
-                        ],
-                      );
-                    },
-                  ),
-                );
-              }),
+              ..._dailyTrends.reversed.map(_buildDailyTrendRow),
           ],
         ),
+      ),
+    );
+  }
+
+  Widget _buildDailyTrendRow(DailyTrendPoint point) {
+    final dateLabel = _formatDateShort(point.date);
+    final hasActivity = point.hasActivity;
+    final progress = point.connectedSeconds <= 0
+        ? 0.0
+        : (point.listeningSeconds / point.connectedSeconds).clamp(0.0, 1.0);
+
+    final values = Wrap(
+      alignment: WrapAlignment.end,
+      crossAxisAlignment: WrapCrossAlignment.center,
+      spacing: 4,
+      runSpacing: 2,
+      children: hasActivity
+          ? [
+              Text(
+                point.listeningFormatted,
+                style: const TextStyle(
+                  fontSize: 12,
+                  fontWeight: FontWeight.bold,
+                  color: Colors.greenAccent,
+                  fontFeatures: [FontFeature.tabularFigures()],
+                ),
+              ),
+              Text(
+                '/ ${point.connectedFormatted}',
+                style: TextStyle(
+                  fontSize: 11,
+                  color: Colors.cyanAccent.shade100,
+                ),
+              ),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
+                decoration: BoxDecoration(
+                  color: Colors.teal.shade900.withValues(alpha: 0.5),
+                  borderRadius: BorderRadius.circular(3),
+                ),
+                child: Text(
+                  '${(point.listeningRatio * 100).toStringAsFixed(0)}%',
+                  style: const TextStyle(
+                    fontSize: 10,
+                    fontWeight: FontWeight.bold,
+                    color: Colors.tealAccent,
+                  ),
+                ),
+              ),
+            ]
+          : [
+              Text(
+                'No activity',
+                style: TextStyle(
+                  fontSize: 11,
+                  fontStyle: FontStyle.italic,
+                  color: Colors.grey.shade600,
+                ),
+              ),
+            ],
+    );
+
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 6),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          LayoutBuilder(
+            builder: (context, constraints) {
+              final date = Text(
+                dateLabel,
+                softWrap: true,
+                style: TextStyle(
+                  fontSize: 12,
+                  fontWeight: hasActivity ? FontWeight.bold : FontWeight.normal,
+                  color: hasActivity ? Colors.white : Colors.grey.shade500,
+                ),
+              );
+              if (constraints.maxWidth < 240) {
+                return Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [date, const SizedBox(height: 2), values],
+                );
+              }
+              return Row(
+                children: [
+                  Flexible(flex: 4, child: date),
+                  const SizedBox(width: 8),
+                  Expanded(flex: 6, child: values),
+                ],
+              );
+            },
+          ),
+          if (hasActivity) ...[
+            const SizedBox(height: 5),
+            ClipRRect(
+              borderRadius: BorderRadius.circular(4),
+              child: LinearProgressIndicator(
+                value: progress,
+                minHeight: 5,
+                backgroundColor: Colors.white10,
+                valueColor: const AlwaysStoppedAnimation<Color>(
+                  Colors.tealAccent,
+                ),
+              ),
+            ),
+          ],
+        ],
       ),
     );
   }

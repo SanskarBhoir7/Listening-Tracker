@@ -31,8 +31,22 @@ class ListeningTrackerApp extends StatelessWidget {
       theme: ThemeData(
         brightness: Brightness.dark,
         useMaterial3: true,
-        colorSchemeSeed: Colors.teal,
-        fontFamily: 'monospace',
+        colorScheme:
+            ColorScheme.fromSeed(
+              seedColor: const Color(0xFF00F5D4),
+              brightness: Brightness.dark,
+              surface: const Color(0xFF151B23),
+            ).copyWith(
+              primary: const Color(0xFF00F5D4),
+              secondary: const Color(0xFF2CE59B),
+              surface: const Color(0xFF151B23),
+            ),
+        scaffoldBackgroundColor: const Color(0xFF0B1016),
+        appBarTheme: const AppBarTheme(
+          backgroundColor: Color(0xFF0F151D),
+          foregroundColor: Colors.white,
+          surfaceTintColor: Colors.transparent,
+        ),
       ),
       home: const MonitorDashboard(),
       debugShowCheckedModeBanner: false,
@@ -484,6 +498,9 @@ class _MonitorDashboardState extends State<MonitorDashboard>
         ],
       ),
       bottomNavigationBar: NavigationBar(
+        backgroundColor: const Color(0xFF101720),
+        indicatorColor: const Color(0xFF00F5D4).withValues(alpha: 0.16),
+        height: 68,
         selectedIndex: _selectedTabIndex,
         onDestinationSelected: (int index) {
           setState(() {
@@ -519,13 +536,13 @@ class _MonitorDashboardState extends State<MonitorDashboard>
         children: [
           _buildPermissionsCard(),
           const SizedBox(height: 12),
-          _buildControlButton(),
-          const SizedBox(height: 12),
           _buildStateIndicator(currentState, stateColor),
           const SizedBox(height: 12),
-          _buildDualDurationCard(),
+          _buildControlButton(),
           const SizedBox(height: 12),
           _buildBreakStatusCard(),
+          const SizedBox(height: 12),
+          _buildDualDurationCard(),
           const SizedBox(height: 12),
           _buildLiveSessionCard(),
           const SizedBox(height: 12),
@@ -626,48 +643,113 @@ class _MonitorDashboardState extends State<MonitorDashboard>
 
   Widget _buildStateIndicator(String currentState, Color stateColor) {
     final remainingGrace = _engine.gracePeriodRemaining;
+    final activeDevice = _engine.activeOutputDevice;
 
     return Container(
-      padding: const EdgeInsets.symmetric(vertical: 16, horizontal: 16),
+      padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
-        color: stateColor.withValues(alpha: 0.15),
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: stateColor, width: 2),
+        gradient: LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: [stateColor.withValues(alpha: 0.18), const Color(0xFF151B23)],
+        ),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(
+          color: stateColor.withValues(alpha: 0.65),
+          width: 1.3,
+        ),
       ),
       child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(
-            'CURRENT STATE',
-            style: TextStyle(
-              color: Colors.grey.shade400,
-              fontSize: 11,
-              letterSpacing: 1.2,
-            ),
-          ),
-          const SizedBox(height: 6),
-          FittedBox(
-            fit: BoxFit.scaleDown,
-            child: Text(
-              currentState,
-              style: TextStyle(
-                color: stateColor,
-                fontSize: 24,
-                fontWeight: FontWeight.bold,
-                letterSpacing: 1.2,
-              ),
-            ),
-          ),
-          if (_engine.activeOutputDevice != null) ...[
-            const SizedBox(height: 10),
-            FittedBox(
-              fit: BoxFit.scaleDown,
-              child: Text(
-                _engine.liveActiveListeningFormatted,
-                style: const TextStyle(
-                  fontSize: 34,
-                  fontWeight: FontWeight.w300,
-                  color: Colors.white,
+          Row(
+            children: [
+              Icon(Icons.monitor_heart, color: stateColor, size: 22),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'CURRENT STATE',
+                      style: TextStyle(
+                        color: Colors.grey.shade400,
+                        fontSize: 10,
+                        letterSpacing: 1.3,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                    const SizedBox(height: 5),
+                    Text(
+                      currentState,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        color: stateColor,
+                        fontSize: 21,
+                        fontWeight: FontWeight.w800,
+                        letterSpacing: 0.5,
+                      ),
+                    ),
+                  ],
                 ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          Row(
+            children: [
+              Icon(
+                _engine.isMonitoring
+                    ? Icons.radio_button_checked
+                    : Icons.radio_button_off,
+                size: 12,
+                color: _engine.isMonitoring
+                    ? const Color(0xFF2CE59B)
+                    : Colors.grey.shade500,
+              ),
+              const SizedBox(width: 5),
+              Expanded(
+                child: Text(
+                  _engine.isMonitoring ? 'Monitoring active' : 'Monitoring off',
+                  softWrap: true,
+                  style: TextStyle(
+                    color: _engine.isMonitoring
+                        ? const Color(0xFF2CE59B)
+                        : Colors.grey.shade400,
+                    fontSize: 11,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          if (activeDevice != null) ...[
+            const SizedBox(height: 12),
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+              decoration: BoxDecoration(
+                color: Colors.black.withValues(alpha: 0.18),
+                borderRadius: BorderRadius.circular(9),
+              ),
+              child: Row(
+                children: [
+                  const Icon(
+                    Icons.headphones,
+                    size: 16,
+                    color: Color(0xFF00F5D4),
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      activeDevice.name,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(fontSize: 12, color: Colors.white),
+                    ),
+                  ),
+                ],
               ),
             ),
           ],
@@ -700,128 +782,153 @@ class _MonitorDashboardState extends State<MonitorDashboard>
     final isListening = _engine.sessionState == ListeningSessionState.active;
     final inGrace = _engine.sessionState == ListeningSessionState.gracePeriod;
 
-    return Row(
-      children: [
-        // Connection Duration Box
-        Expanded(
-          child: Container(
-            padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 10),
-            decoration: BoxDecoration(
-              color: Colors.cyan.shade900.withValues(alpha: 0.25),
-              borderRadius: BorderRadius.circular(10),
-              border: Border.all(
-                color: isBtConnected
-                    ? Colors.cyanAccent.shade400
-                    : Colors.cyan.shade900,
-                width: 1.5,
-              ),
-            ),
-            child: Column(
-              children: [
-                Text(
-                  'CONNECTION TIME',
-                  style: TextStyle(
-                    color: Colors.cyanAccent.shade100,
-                    fontSize: 10,
-                    fontWeight: FontWeight.bold,
-                    letterSpacing: 0.8,
-                  ),
+    return Card(
+      color: const Color(0xFF151B23),
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(14),
+        side: BorderSide(color: Colors.white.withValues(alpha: 0.08)),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.all(10),
+        child: Row(
+          children: [
+            // Connection Duration Box
+            Expanded(
+              child: Container(
+                padding: const EdgeInsets.symmetric(
+                  vertical: 12,
+                  horizontal: 10,
                 ),
-                const SizedBox(height: 4),
-                FittedBox(
-                  fit: BoxFit.scaleDown,
-                  child: Text(
-                    _engine.liveConnectedFormatted,
-                    style: const TextStyle(
-                      fontSize: 22,
-                      fontWeight: FontWeight.bold,
-                      color: Colors.white,
-                      fontFamily: 'monospace',
-                    ),
-                  ),
-                ),
-                const SizedBox(height: 2),
-                Text(
-                  isBtConnected ? 'Connected' : 'Disconnected',
-                  style: TextStyle(
-                    fontSize: 11,
+                decoration: BoxDecoration(
+                  color: Colors.cyan.shade900.withValues(alpha: 0.25),
+                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(
                     color: isBtConnected
-                        ? Colors.cyanAccent
-                        : Colors.grey.shade500,
+                        ? Colors.cyanAccent.shade400
+                        : Colors.cyan.shade900,
+                    width: 1.5,
                   ),
                 ),
-              ],
-            ),
-          ),
-        ),
-        const SizedBox(width: 10),
-        // Listening Duration Box
-        Expanded(
-          child: Container(
-            padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 10),
-            decoration: BoxDecoration(
-              color: Colors.green.shade900.withValues(alpha: 0.25),
-              borderRadius: BorderRadius.circular(10),
-              border: Border.all(
-                color: isListening
-                    ? Colors.greenAccent.shade400
-                    : inGrace
-                    ? Colors.amberAccent.shade400
-                    : Colors.green.shade900,
-                width: 1.5,
+                child: Column(
+                  children: [
+                    Text(
+                      'CONNECTION TIME',
+                      style: TextStyle(
+                        color: Colors.cyanAccent.shade100,
+                        fontSize: 10,
+                        fontWeight: FontWeight.bold,
+                        letterSpacing: 0.8,
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    FittedBox(
+                      fit: BoxFit.scaleDown,
+                      child: Text(
+                        _engine.liveConnectedFormatted,
+                        style: const TextStyle(
+                          fontSize: 22,
+                          fontWeight: FontWeight.bold,
+                          color: Colors.white,
+                          fontFamily: 'monospace',
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      isBtConnected ? 'Connected' : 'Disconnected',
+                      style: TextStyle(
+                        fontSize: 11,
+                        color: isBtConnected
+                            ? Colors.cyanAccent
+                            : Colors.grey.shade500,
+                      ),
+                    ),
+                  ],
+                ),
               ),
             ),
-            child: Column(
-              children: [
-                Text(
-                  'LISTENING TIME',
-                  style: TextStyle(
-                    color: Colors.greenAccent.shade100,
-                    fontSize: 10,
-                    fontWeight: FontWeight.bold,
-                    letterSpacing: 0.8,
-                  ),
+            const SizedBox(width: 10),
+            // Listening Duration Box
+            Expanded(
+              child: Container(
+                padding: const EdgeInsets.symmetric(
+                  vertical: 12,
+                  horizontal: 10,
                 ),
-                const SizedBox(height: 4),
-                FittedBox(
-                  fit: BoxFit.scaleDown,
-                  child: Text(
-                    _engine.liveActiveListeningFormatted,
-                    style: const TextStyle(
-                      fontSize: 22,
-                      fontWeight: FontWeight.bold,
-                      color: Colors.white,
-                      fontFamily: 'monospace',
-                    ),
-                  ),
-                ),
-                const SizedBox(height: 2),
-                Text(
-                  isListening
-                      ? 'Listening'
-                      : inGrace
-                      ? 'Paused (Grace)'
-                      : 'Not listening',
-                  style: TextStyle(
-                    fontSize: 11,
+                decoration: BoxDecoration(
+                  color: Colors.green.shade900.withValues(alpha: 0.25),
+                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(
                     color: isListening
-                        ? Colors.greenAccent
+                        ? Colors.greenAccent.shade400
                         : inGrace
-                        ? Colors.amberAccent
-                        : Colors.grey.shade500,
+                        ? Colors.amberAccent.shade400
+                        : Colors.green.shade900,
+                    width: 1.5,
                   ),
                 ),
-              ],
+                child: Column(
+                  children: [
+                    Text(
+                      'LISTENING TIME',
+                      style: TextStyle(
+                        color: Colors.greenAccent.shade100,
+                        fontSize: 10,
+                        fontWeight: FontWeight.bold,
+                        letterSpacing: 0.8,
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    FittedBox(
+                      fit: BoxFit.scaleDown,
+                      child: Text(
+                        _engine.liveActiveListeningFormatted,
+                        style: const TextStyle(
+                          fontSize: 22,
+                          fontWeight: FontWeight.bold,
+                          color: Colors.white,
+                          fontFamily: 'monospace',
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      isListening
+                          ? 'Listening'
+                          : inGrace
+                          ? 'Paused (Grace)'
+                          : 'Not listening',
+                      style: TextStyle(
+                        fontSize: 11,
+                        color: isListening
+                            ? Colors.greenAccent
+                            : inGrace
+                            ? Colors.amberAccent
+                            : Colors.grey.shade500,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
             ),
-          ),
+          ],
         ),
-      ],
+      ),
     );
   }
 
   Widget _buildBreakStatusCard() {
     final breakState = _engine.breakState;
     final color = breakState.statusColor;
+    final breakConfig = _engine.breakEngine.config;
+    final nextThreshold = breakState.status == BreakStatus.normal
+        ? breakConfig.breakSoonThreshold
+        : breakConfig.breakRecommendedThreshold;
+    final thresholdProgress = nextThreshold.inSeconds <= 0
+        ? 1.0
+        : (breakState.continuousListeningDuration.inSeconds /
+                  nextThreshold.inSeconds)
+              .clamp(0.0, 1.0);
 
     return Card(
       key: const Key('break_status_card'),
@@ -850,8 +957,8 @@ class _MonitorDashboardState extends State<MonitorDashboard>
                         breakState.status == BreakStatus.normal
                             ? Icons.headphones
                             : (breakState.status == BreakStatus.breakSoon
-                                ? Icons.alarm
-                                : Icons.warning_amber_rounded),
+                                  ? Icons.alarm
+                                  : Icons.warning_amber_rounded),
                         color: color,
                         size: 18,
                       ),
@@ -905,7 +1012,9 @@ class _MonitorDashboardState extends State<MonitorDashboard>
                             vertical: 2,
                           ),
                           decoration: BoxDecoration(
-                            color: Colors.purple.shade900.withValues(alpha: 0.6),
+                            color: Colors.purple.shade900.withValues(
+                              alpha: 0.6,
+                            ),
                             borderRadius: BorderRadius.circular(4),
                             border: Border.all(
                               color: Colors.purpleAccent,
@@ -935,7 +1044,9 @@ class _MonitorDashboardState extends State<MonitorDashboard>
                         decoration: BoxDecoration(
                           color: color.withValues(alpha: 0.15),
                           borderRadius: BorderRadius.circular(6),
-                          border: Border.all(color: color.withValues(alpha: 0.5)),
+                          border: Border.all(
+                            color: color.withValues(alpha: 0.5),
+                          ),
                         ),
                         child: Text(
                           breakState.statusLabel,
@@ -1010,7 +1121,9 @@ class _MonitorDashboardState extends State<MonitorDashboard>
                           style: TextStyle(
                             fontSize: 20,
                             fontWeight: FontWeight.bold,
-                            color: breakState.timeUntilNextThreshold == Duration.zero
+                            color:
+                                breakState.timeUntilNextThreshold ==
+                                    Duration.zero
                                 ? Colors.grey.shade500
                                 : Colors.tealAccent,
                             fontFamily: 'monospace',
@@ -1022,6 +1135,50 @@ class _MonitorDashboardState extends State<MonitorDashboard>
                 ),
               ],
             ),
+            if (breakState.isEnabled) ...[
+              const SizedBox(height: 12),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Expanded(
+                    child: Text(
+                      breakState.status == BreakStatus.normal
+                          ? 'Progress to first reminder'
+                          : breakState.status == BreakStatus.breakSoon
+                          ? 'Progress to recommended break'
+                          : 'Recommended threshold reached',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        fontSize: 11,
+                        color: Colors.grey.shade400,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Text(
+                    '${(thresholdProgress * 100).round()}%',
+                    style: TextStyle(
+                      fontSize: 11,
+                      fontWeight: FontWeight.bold,
+                      color: color,
+                      fontFeatures: const [FontFeature.tabularFigures()],
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 5),
+              ClipRRect(
+                borderRadius: BorderRadius.circular(6),
+                child: LinearProgressIndicator(
+                  key: const Key('break_threshold_progress'),
+                  value: thresholdProgress,
+                  minHeight: 7,
+                  backgroundColor: Colors.white10,
+                  valueColor: AlwaysStoppedAnimation<Color>(color),
+                ),
+              ),
+            ],
             const SizedBox(height: 12),
             Container(
               width: double.infinity,
@@ -1033,11 +1190,7 @@ class _MonitorDashboardState extends State<MonitorDashboard>
               child: Row(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Icon(
-                    Icons.info_outline,
-                    size: 15,
-                    color: color,
-                  ),
+                  Icon(Icons.info_outline, size: 15, color: color),
                   const SizedBox(width: 8),
                   Expanded(
                     child: Text(
@@ -1258,10 +1411,10 @@ class _MonitorDashboardState extends State<MonitorDashboard>
                         OutlinedButton(
                           key: const Key('btn_reset_simulation'),
                           onPressed: breakState.isSimulated
-                            ? () {
-                                _engine.debugResetSimulatedListening();
-                              }
-                            : null,
+                              ? () {
+                                  _engine.debugResetSimulatedListening();
+                                }
+                              : null,
                           style: OutlinedButton.styleFrom(
                             visualDensity: VisualDensity.compact,
                             side: BorderSide(
@@ -1365,23 +1518,7 @@ class _MonitorDashboardState extends State<MonitorDashboard>
         valueColor: sessionColor,
         valueWeight: FontWeight.bold,
       ),
-      _buildRow(
-        'Connection Duration',
-        _engine.liveConnectedFormatted,
-        valueColor: Colors.cyanAccent.shade100,
-      ),
-      _buildRow(
-        'Listening Duration',
-        _engine.liveActiveListeningFormatted,
-        valueColor: Colors.greenAccent.shade200,
-        valueWeight: FontWeight.bold,
-      ),
       _buildRow('Silent / Paused', _engine.liveSilentFormatted),
-      _buildRow(
-        'Continuous Total',
-        _engine.liveContinuousFormatted,
-        valueColor: Colors.tealAccent.shade100,
-      ),
       _buildRow(
         'Audio Grace Window',
         '${_engine.gracePeriod.inMinutes} min (Audio pause only)',
@@ -1392,16 +1529,105 @@ class _MonitorDashboardState extends State<MonitorDashboard>
 
   Widget _buildActiveOutputCard() {
     final active = _engine.activeOutputDevice;
-    return _buildSection('Active Audio Output', [
-      _buildRow('Name', active?.name ?? 'Built-in Phone Speaker'),
-      _buildRow('Type', active?.deviceType ?? 'Built-in Speaker'),
-      _buildRow('Connection', active?.connectionType ?? 'internal'),
-      _buildRow(
-        'Audio Playing',
-        _engine.isAudioPlaying ? 'YES' : 'NO',
-        valueColor: _engine.isAudioPlaying ? Colors.greenAccent : Colors.grey,
+    final isPlaying = _engine.isAudioPlaying;
+
+    return Card(
+      color: const Color(0xFF151B23),
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(14),
+        side: BorderSide(color: Colors.cyanAccent.withValues(alpha: 0.18)),
       ),
-    ]);
+      child: Padding(
+        padding: const EdgeInsets.all(14),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                const Icon(
+                  Icons.graphic_eq,
+                  color: Color(0xFF00F5D4),
+                  size: 18,
+                ),
+                const SizedBox(width: 8),
+                const Expanded(
+                  child: Text(
+                    'Active Audio Output',
+                    style: TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.bold,
+                      color: Color(0xFF00F5D4),
+                      letterSpacing: 0.5,
+                    ),
+                  ),
+                ),
+                Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 8,
+                    vertical: 4,
+                  ),
+                  decoration: BoxDecoration(
+                    color:
+                        (isPlaying ? const Color(0xFF2CE59B) : Colors.white30)
+                            .withValues(alpha: 0.14),
+                    borderRadius: BorderRadius.circular(20),
+                  ),
+                  child: Text(
+                    isPlaying ? 'PLAYING' : 'SILENT',
+                    style: TextStyle(
+                      color: isPlaying
+                          ? const Color(0xFF2CE59B)
+                          : Colors.grey.shade400,
+                      fontSize: 9,
+                      fontWeight: FontWeight.bold,
+                      letterSpacing: 0.5,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 12),
+            Row(
+              children: [
+                Icon(
+                  active?.connectionType == 'bluetooth'
+                      ? Icons.bluetooth
+                      : Icons.headphones,
+                  size: 20,
+                  color: Colors.cyanAccent.shade100,
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        active?.name ?? 'Built-in Phone Speaker',
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                          fontSize: 16,
+                          fontWeight: FontWeight.bold,
+                          color: Colors.white,
+                        ),
+                      ),
+                      const SizedBox(height: 3),
+                      Text(
+                        '${active?.deviceType ?? 'Built-in Speaker'} · ${active?.connectionType ?? 'internal'}',
+                        style: TextStyle(
+                          fontSize: 11,
+                          color: Colors.grey.shade400,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
   }
 
   Widget _buildConnectedDevicesCard() {

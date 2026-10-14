@@ -534,6 +534,8 @@ class _DiagnosticLogViewerState extends State<DiagnosticLogViewer> {
                 const SizedBox(height: 8),
                 SingleChildScrollView(
                   scrollDirection: Axis.horizontal,
+                  primary: false,
+                  physics: const ClampingScrollPhysics(),
                   child: Row(
                     children: _filterCategories.map((cat) {
                       final isSelected = _selectedFilter == cat;
@@ -568,8 +570,10 @@ class _DiagnosticLogViewerState extends State<DiagnosticLogViewer> {
           // Total Count Info Bar
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            child: Wrap(
+              alignment: WrapAlignment.spaceBetween,
+              spacing: 12,
+              runSpacing: 4,
               children: [
                 Text(
                   'Showing ${filtered.length} of $_totalCount stored events',
@@ -642,6 +646,7 @@ class _DiagnosticLogViewerState extends State<DiagnosticLogViewer> {
                               crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
                                 Row(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
                                   children: [
                                     Text(
                                       event.timeClock,
@@ -652,36 +657,46 @@ class _DiagnosticLogViewerState extends State<DiagnosticLogViewer> {
                                       ),
                                     ),
                                     const SizedBox(width: 8),
-                                    Container(
-                                      padding: const EdgeInsets.symmetric(
-                                        horizontal: 5,
-                                        vertical: 1.5,
-                                      ),
-                                      decoration: BoxDecoration(
-                                        color: color.withValues(alpha: 0.15),
-                                        borderRadius: BorderRadius.circular(4),
-                                        border: Border.all(
-                                          color: color.withValues(alpha: 0.5),
+                                    Expanded(
+                                      child: Container(
+                                        padding: const EdgeInsets.symmetric(
+                                          horizontal: 5,
+                                          vertical: 2,
                                         ),
-                                      ),
-                                      child: Text(
-                                        event.eventType,
-                                        style: TextStyle(
-                                          fontSize: 11,
-                                          fontWeight: FontWeight.bold,
-                                          color: color,
+                                        decoration: BoxDecoration(
+                                          color: color.withValues(alpha: 0.15),
+                                          borderRadius: BorderRadius.circular(
+                                            4,
+                                          ),
+                                          border: Border.all(
+                                            color: color.withValues(alpha: 0.5),
+                                          ),
+                                        ),
+                                        child: Text(
+                                          event.eventType,
+                                          softWrap: true,
+                                          maxLines: 2,
+                                          overflow: TextOverflow.ellipsis,
+                                          style: TextStyle(
+                                            fontSize: 11,
+                                            fontWeight: FontWeight.bold,
+                                            color: color,
+                                          ),
                                         ),
                                       ),
                                     ),
-                                    const Spacer(),
-                                    Text(
-                                      event.source,
-                                      style: TextStyle(
-                                        fontSize: 10,
-                                        color: Colors.grey.shade500,
-                                      ),
-                                    ),
+                                    const SizedBox(width: 6),
                                   ],
+                                ),
+                                Align(
+                                  alignment: Alignment.centerRight,
+                                  child: Text(
+                                    event.source,
+                                    style: TextStyle(
+                                      fontSize: 10,
+                                      color: Colors.grey.shade500,
+                                    ),
+                                  ),
                                 ),
                                 const SizedBox(height: 4),
                                 if (event.deviceName != null &&

@@ -28,10 +28,7 @@ void main() {
                   ? TextScaler.linear(textScaleFactor)
                   : null,
             );
-            return MediaQuery(
-              data: mediaQuery,
-              child: child,
-            );
+            return MediaQuery(data: mediaQuery, child: child);
           },
         ),
       ),
@@ -49,37 +46,43 @@ void main() {
       expect(find.byIcon(Icons.calendar_today), findsOneWidget);
     });
 
-    testWidgets('2. Today loads correctly with populated sessions and stats', (tester) async {
+    testWidgets('2. Today loads correctly with populated sessions and stats', (
+      tester,
+    ) async {
       final now = DateTime.now();
       final startTime = DateTime(now.year, now.month, now.day, 10, 0, 0);
       final endTime = startTime.add(const Duration(minutes: 30));
 
       // Save a connection record (strictly for connection time: 1800s -> 30m)
-      await db.saveConnectionRecord(ConnectionRecord(
-        id: 'conn-1',
-        deviceId: 'bt-wh-1000xm4',
-        deviceName: 'Sony WH-1000XM4',
-        deviceType: 'Bluetooth Headphones',
-        connectedAt: startTime,
-        disconnectedAt: endTime,
-        durationSeconds: 1800,
-      ));
+      await db.saveConnectionRecord(
+        ConnectionRecord(
+          id: 'conn-1',
+          deviceId: 'bt-wh-1000xm4',
+          deviceName: 'Sony WH-1000XM4',
+          deviceType: 'Bluetooth Headphones',
+          connectedAt: startTime,
+          disconnectedAt: endTime,
+          durationSeconds: 1800,
+        ),
+      );
 
       // Save a listening session (active listening duration: 1200s -> 20m)
-      await db.saveDeviceSession(ListeningSession(
-        id: 'sess-1',
-        deviceId: 'bt-wh-1000xm4',
-        deviceName: 'Sony WH-1000XM4',
-        deviceType: 'Bluetooth Headphones',
-        connectedAt: startTime,
-        disconnectedAt: endTime,
-        listeningStartedAt: startTime,
-        listeningEndedAt: endTime,
-        connectedDurationSeconds: 1800,
-        activeListeningDurationSeconds: 1200,
-        silentDurationSeconds: 600,
-        status: 'completed',
-      ));
+      await db.saveDeviceSession(
+        ListeningSession(
+          id: 'sess-1',
+          deviceId: 'bt-wh-1000xm4',
+          deviceName: 'Sony WH-1000XM4',
+          deviceType: 'Bluetooth Headphones',
+          connectedAt: startTime,
+          disconnectedAt: endTime,
+          listeningStartedAt: startTime,
+          listeningEndedAt: endTime,
+          connectedDurationSeconds: 1800,
+          activeListeningDurationSeconds: 1200,
+          silentDurationSeconds: 600,
+          status: 'completed',
+        ),
+      );
 
       await tester.pumpWidget(buildTestApp(child: HistoryView(database: db)));
       await tester.pumpAndSettle();
@@ -95,37 +98,114 @@ void main() {
       expect(find.text('Listening Time'), findsOneWidget);
     });
 
+    testWidgets(
+      'History maps exactly one independent card to each saved session',
+      (tester) async {
+        final now = DateTime.now();
+        final firstStart = DateTime(now.year, now.month, now.day, 9);
+        final secondStart = DateTime(now.year, now.month, now.day, 14);
+        final sessions = [
+          ListeningSession(
+            id: 'history-map-first',
+            deviceId: 'first-device',
+            deviceName: 'First Headphones',
+            deviceType: 'Bluetooth Headphones',
+            connectedAt: firstStart,
+            disconnectedAt: firstStart.add(const Duration(minutes: 15)),
+            connectedDurationSeconds: 900,
+            activeListeningDurationSeconds: 600,
+            silentDurationSeconds: 300,
+            status: 'completed',
+          ),
+          ListeningSession(
+            id: 'history-map-second',
+            deviceId: 'second-device',
+            deviceName: 'Second Headphones',
+            deviceType: 'Bluetooth Headphones',
+            connectedAt: secondStart,
+            disconnectedAt: secondStart.add(const Duration(minutes: 20)),
+            connectedDurationSeconds: 1200,
+            activeListeningDurationSeconds: 300,
+            silentDurationSeconds: 900,
+            status: 'completed',
+          ),
+        ];
+        for (final session in sessions) {
+          await db.saveDeviceSession(session);
+        }
+
+        await tester.pumpWidget(buildTestApp(child: HistoryView(database: db)));
+        await tester.pumpAndSettle();
+
+        expect(find.text('Recorded Sessions (2)'), findsOneWidget);
+        expect(
+          find.byKey(const Key('history_session_history-map-first')),
+          findsOneWidget,
+        );
+        expect(
+          find.byKey(const Key('history_session_history-map-second')),
+          findsOneWidget,
+        );
+        expect(
+          find.descendant(
+            of: find.byKey(const Key('history_session_history-map-first')),
+          matching: find.text('10m 0s'),
+          ),
+          findsOneWidget,
+        );
+        expect(
+          find.descendant(
+            of: find.byKey(const Key('history_session_history-map-second')),
+          matching: find.text('5m 0s'),
+          ),
+          findsOneWidget,
+        );
+        expect(tester.takeException(), isNull);
+      },
+    );
+
     testWidgets('3. Changing date updates the displayed data', (tester) async {
       final now = DateTime.now();
       final yesterday = now.subtract(const Duration(days: 1));
-      final yesterdayStart = DateTime(yesterday.year, yesterday.month, yesterday.day, 14, 0, 0);
+      final yesterdayStart = DateTime(
+        yesterday.year,
+        yesterday.month,
+        yesterday.day,
+        14,
+        0,
+        0,
+      );
       final yesterdayEnd = yesterdayStart.add(const Duration(minutes: 45));
 
       // Save a session for yesterday
-      await db.saveConnectionRecord(ConnectionRecord(
-        id: 'conn-yesterday',
-        deviceId: 'airpods-pro',
-        deviceName: 'AirPods Pro',
-        deviceType: 'Bluetooth Headphones',
-        connectedAt: yesterdayStart,
-        disconnectedAt: yesterdayEnd,
-        durationSeconds: 2700,
-      ));
+      await db.saveConnectionRecord(
+        ConnectionRecord(
+          id: 'conn-yesterday',
+          deviceId: 'airpods-pro',
+          deviceName: 'AirPods Pro',
+          deviceType: 'Bluetooth Headphones',
+          connectedAt: yesterdayStart,
+          disconnectedAt: yesterdayEnd,
+          durationSeconds: 2700,
+        ),
+      );
 
-      await db.saveDeviceSession(ListeningSession(
-        id: 'sess-yesterday',
-        deviceId: 'airpods-pro',
-        deviceName: 'AirPods Pro',
-        deviceType: 'Bluetooth Headphones',
-        connectedAt: yesterdayStart,
-        disconnectedAt: yesterdayEnd,
-        listeningStartedAt: yesterdayStart,
-        listeningEndedAt: yesterdayEnd,
-        connectedDurationSeconds: 2700,
-        activeListeningDurationSeconds: 2400,
-        silentDurationSeconds: 300,
-        status: 'completed',
-      ));
+      await db.saveDeviceSession(
+        ListeningSession(
+          id: 'sess-yesterday',
+          deviceId: 'airpods-pro',
+          deviceName: 'AirPods Pro',
+          deviceType: 'Bluetooth Headphones',
+          connectedAt: yesterdayStart,
+          disconnectedAt: yesterdayEnd,
+          listeningStartedAt: yesterdayStart,
+          listeningEndedAt: yesterdayEnd,
+          connectedDurationSeconds: 2700,
+          activeListeningDurationSeconds: 2400,
+          silentDurationSeconds: 300,
+          status: 'completed',
+        ),
+      );
 
       await tester.pumpWidget(buildTestApp(child: HistoryView(database: db)));
       await tester.pumpAndSettle();
@@ -149,87 +229,103 @@ void main() {
       expect(find.text('Today'), findsOneWidget);
     });
 
-    testWidgets('3b. Tapping refresh button re-queries database and updates displayed data immediately', (tester) async {
-      final now = DateTime.now();
-      final session1Start = DateTime(now.year, now.month, now.day, 10, 0, 0);
-      final session1End = session1Start.add(const Duration(minutes: 20));
+    testWidgets(
+      '3b. Tapping refresh button re-queries database and updates displayed data immediately',
+      (tester) async {
+        final now = DateTime.now();
+        final session1Start = DateTime(now.year, now.month, now.day, 10, 0, 0);
+        final session1End = session1Start.add(const Duration(minutes: 20));
 
-      // 1. Initial state: 1 session in database for Today
-      await db.saveConnectionRecord(ConnectionRecord(
-        id: 'conn-1',
-        deviceId: 'realme-buds',
-        deviceName: 'realme Buds T200 Lite',
-        deviceType: 'Bluetooth Headphones',
-        connectedAt: session1Start,
-        disconnectedAt: session1End,
-        durationSeconds: 1200,
-      ));
-      await db.saveDeviceSession(ListeningSession(
-        id: 'sess-1',
-        deviceId: 'realme-buds',
-        deviceName: 'realme Buds T200 Lite',
-        deviceType: 'Bluetooth Headphones',
-        connectedAt: session1Start,
-        disconnectedAt: session1End,
-        listeningStartedAt: session1Start,
-        listeningEndedAt: session1End,
-        connectedDurationSeconds: 1200,
-        activeListeningDurationSeconds: 1200,
-        silentDurationSeconds: 0,
-        status: 'completed',
-      ));
+        // 1. Initial state: 1 session in database for Today
+        await db.saveConnectionRecord(
+          ConnectionRecord(
+            id: 'conn-1',
+            deviceId: 'realme-buds',
+            deviceName: 'realme Buds T200 Lite',
+            deviceType: 'Bluetooth Headphones',
+            connectedAt: session1Start,
+            disconnectedAt: session1End,
+            durationSeconds: 1200,
+          ),
+        );
+        await db.saveDeviceSession(
+          ListeningSession(
+            id: 'sess-1',
+            deviceId: 'realme-buds',
+            deviceName: 'realme Buds T200 Lite',
+            deviceType: 'Bluetooth Headphones',
+            connectedAt: session1Start,
+            disconnectedAt: session1End,
+            listeningStartedAt: session1Start,
+            listeningEndedAt: session1End,
+            connectedDurationSeconds: 1200,
+            activeListeningDurationSeconds: 1200,
+            silentDurationSeconds: 0,
+            status: 'completed',
+          ),
+        );
 
-      await tester.pumpWidget(buildTestApp(child: HistoryView(database: db)));
-      await tester.pumpAndSettle();
+        await tester.pumpWidget(buildTestApp(child: HistoryView(database: db)));
+        await tester.pumpAndSettle();
 
-      // Verify initial state: exactly 1 session displayed
-      expect(find.text('Recorded Sessions (1)'), findsOneWidget);
-      expect(find.text('realme Buds T200 Lite'), findsOneWidget);
-      expect(find.text('20m'), findsWidgets);
+        // Verify initial state: exactly 1 session displayed
+        expect(find.text('Recorded Sessions (1)'), findsOneWidget);
+        expect(find.text('realme Buds T200 Lite'), findsOneWidget);
+        expect(find.text('20m'), findsWidgets);
 
-      // 2. A new session is finalized while History view is open on Today
-      final session2Start = DateTime(now.year, now.month, now.day, 12, 0, 0);
-      final session2End = session2Start.add(const Duration(minutes: 30));
-      await db.saveConnectionRecord(ConnectionRecord(
-        id: 'conn-2',
-        deviceId: 'wh-1000xm4',
-        deviceName: 'Sony WH-1000XM4',
-        deviceType: 'Bluetooth Headphones',
-        connectedAt: session2Start,
-        disconnectedAt: session2End,
-        durationSeconds: 1800,
-      ));
-      await db.saveDeviceSession(ListeningSession(
-        id: 'sess-2',
-        deviceId: 'wh-1000xm4',
-        deviceName: 'Sony WH-1000XM4',
-        deviceType: 'Bluetooth Headphones',
-        connectedAt: session2Start,
-        disconnectedAt: session2End,
-        listeningStartedAt: session2Start,
-        listeningEndedAt: session2End,
-        connectedDurationSeconds: 1800,
-        activeListeningDurationSeconds: 1800,
-        silentDurationSeconds: 0,
-        status: 'completed',
-      ));
+        // 2. A new session is finalized while History view is open on Today
+        final session2Start = DateTime(now.year, now.month, now.day, 12, 0, 0);
+        final session2End = session2Start.add(const Duration(minutes: 30));
+        await db.saveConnectionRecord(
+          ConnectionRecord(
+            id: 'conn-2',
+            deviceId: 'wh-1000xm4',
+            deviceName: 'Sony WH-1000XM4',
+            deviceType: 'Bluetooth Headphones',
+            connectedAt: session2Start,
+            disconnectedAt: session2End,
+            durationSeconds: 1800,
+          ),
+        );
+        await db.saveDeviceSession(
+          ListeningSession(
+            id: 'sess-2',
+            deviceId: 'wh-1000xm4',
+            deviceName: 'Sony WH-1000XM4',
+            deviceType: 'Bluetooth Headphones',
+            connectedAt: session2Start,
+            disconnectedAt: session2End,
+            listeningStartedAt: session2Start,
+            listeningEndedAt: session2End,
+            connectedDurationSeconds: 1800,
+            activeListeningDurationSeconds: 1800,
+            silentDurationSeconds: 0,
+            status: 'completed',
+          ),
+        );
 
-      // Without refresh, screen still shows 1 session
-      expect(find.text('Recorded Sessions (1)'), findsOneWidget);
-      expect(find.text('Sony WH-1000XM4'), findsNothing);
+        // Without refresh, screen still shows 1 session
+        expect(find.text('Recorded Sessions (1)'), findsOneWidget);
+        expect(find.text('Sony WH-1000XM4'), findsNothing);
 
-      // 3. Tap the refresh button in History view
-      await tester.tap(find.byKey(const Key('history_refresh_button')));
-      await tester.pumpAndSettle();
+        // 3. Tap the refresh button in History view
+        await tester.tap(find.byKey(const Key('history_refresh_button')));
+        await tester.pumpAndSettle();
 
-      // 4. Verify History immediately updated to show 2 sessions and combined duration
-      expect(find.text('Recorded Sessions (2)'), findsOneWidget);
-      expect(find.text('realme Buds T200 Lite'), findsOneWidget);
-      expect(find.text('Sony WH-1000XM4'), findsOneWidget);
-      expect(find.text('50m'), findsWidgets); // 20m + 30m = 50m active listening
-    });
+        // 4. Verify History immediately updated to show 2 sessions and combined duration
+        expect(find.text('Recorded Sessions (2)'), findsOneWidget);
+        expect(find.text('realme Buds T200 Lite'), findsOneWidget);
+        expect(find.text('Sony WH-1000XM4'), findsOneWidget);
+        expect(
+          find.text('50m'),
+          findsWidgets,
+        ); // 20m + 30m = 50m active listening
+      },
+    );
 
-    testWidgets('4. Empty date shows empty state without error', (tester) async {
+    testWidgets('4. Empty date shows empty state without error', (
+      tester,
+    ) async {
       await tester.pumpWidget(buildTestApp(child: HistoryView(database: db)));
       await tester.pumpAndSettle();
 
@@ -238,35 +334,41 @@ void main() {
       expect(find.text('0s'), findsWidgets);
     });
 
-    testWidgets('5. Session information is displayed correctly', (tester) async {
+    testWidgets('5. Session information is displayed correctly', (
+      tester,
+    ) async {
       final now = DateTime.now();
       final start = DateTime(now.year, now.month, now.day, 9, 15, 0);
       final end = start.add(const Duration(minutes: 25));
 
-      await db.saveConnectionRecord(ConnectionRecord(
-        id: 'conn-bose',
-        deviceId: 'bose-qc45',
-        deviceName: 'Bose QC45',
-        deviceType: 'Bluetooth Headphones',
-        connectedAt: start,
-        disconnectedAt: end,
-        durationSeconds: 1500,
-      ));
+      await db.saveConnectionRecord(
+        ConnectionRecord(
+          id: 'conn-bose',
+          deviceId: 'bose-qc45',
+          deviceName: 'Bose QC45',
+          deviceType: 'Bluetooth Headphones',
+          connectedAt: start,
+          disconnectedAt: end,
+          durationSeconds: 1500,
+        ),
+      );
 
-      await db.saveDeviceSession(ListeningSession(
-        id: 'sess-bose',
-        deviceId: 'bose-qc45',
-        deviceName: 'Bose QC45',
-        deviceType: 'Bluetooth Headphones',
-        connectedAt: start,
-        disconnectedAt: end,
-        listeningStartedAt: start,
-        listeningEndedAt: end,
-        connectedDurationSeconds: 1500,
-        activeListeningDurationSeconds: 1200,
-        silentDurationSeconds: 300,
-        status: 'completed',
-      ));
+      await db.saveDeviceSession(
+        ListeningSession(
+          id: 'sess-bose',
+          deviceId: 'bose-qc45',
+          deviceName: 'Bose QC45',
+          deviceType: 'Bluetooth Headphones',
+          connectedAt: start,
+          disconnectedAt: end,
+          listeningStartedAt: start,
+          listeningEndedAt: end,
+          connectedDurationSeconds: 1500,
+          activeListeningDurationSeconds: 1200,
+          silentDurationSeconds: 300,
+          status: 'completed',
+        ),
+      );
 
       await tester.pumpWidget(buildTestApp(child: HistoryView(database: db)));
       await tester.pumpAndSettle();
@@ -277,45 +379,52 @@ void main() {
       expect(find.text('20m'), findsWidgets);
     });
 
-    testWidgets('6. Connection and listening durations are displayed separately', (tester) async {
-      final now = DateTime.now();
-      final start = DateTime(now.year, now.month, now.day, 8, 0, 0);
-      final end = start.add(const Duration(minutes: 60));
+    testWidgets(
+      '6. Connection and listening durations are displayed separately',
+      (tester) async {
+        final now = DateTime.now();
+        final start = DateTime(now.year, now.month, now.day, 8, 0, 0);
+        final end = start.add(const Duration(minutes: 60));
 
-      // Connection is 60 minutes, Active listening is only 15 minutes, Silent is 45 minutes
-      await db.saveConnectionRecord(ConnectionRecord(
-        id: 'conn-sep',
-        deviceId: 'sony-xm5',
-        deviceName: 'Sony WH-1000XM5',
-        deviceType: 'Bluetooth Headphones',
-        connectedAt: start,
-        disconnectedAt: end,
-        durationSeconds: 3600,
-      ));
+        // Connection is 60 minutes, Active listening is only 15 minutes, Silent is 45 minutes
+        await db.saveConnectionRecord(
+          ConnectionRecord(
+            id: 'conn-sep',
+            deviceId: 'sony-xm5',
+            deviceName: 'Sony WH-1000XM5',
+            deviceType: 'Bluetooth Headphones',
+            connectedAt: start,
+            disconnectedAt: end,
+            durationSeconds: 3600,
+          ),
+        );
 
-      await db.saveDeviceSession(ListeningSession(
-        id: 'sess-sep',
-        deviceId: 'sony-xm5',
-        deviceName: 'Sony WH-1000XM5',
-        deviceType: 'Bluetooth Headphones',
-        connectedAt: start,
-        disconnectedAt: end,
-        listeningStartedAt: start,
-        listeningEndedAt: end,
-        connectedDurationSeconds: 3600,
-        activeListeningDurationSeconds: 900,
-        silentDurationSeconds: 2700,
-        status: 'completed',
-      ));
+        await db.saveDeviceSession(
+          ListeningSession(
+            id: 'sess-sep',
+            deviceId: 'sony-xm5',
+            deviceName: 'Sony WH-1000XM5',
+            deviceType: 'Bluetooth Headphones',
+            connectedAt: start,
+            disconnectedAt: end,
+            listeningStartedAt: start,
+            listeningEndedAt: end,
+            connectedDurationSeconds: 3600,
+            activeListeningDurationSeconds: 900,
+            silentDurationSeconds: 2700,
+            status: 'completed',
+          ),
+        );
 
-      await tester.pumpWidget(buildTestApp(child: HistoryView(database: db)));
-      await tester.pumpAndSettle();
+        await tester.pumpWidget(buildTestApp(child: HistoryView(database: db)));
+        await tester.pumpAndSettle();
 
-      // Daily summary must separately reflect 15m active vs 1h connection
-      expect(find.text('15m'), findsWidgets); // Active listening
-      expect(find.text('1h'), findsWidgets);  // Bluetooth connected
-      expect(find.text('45m'), findsWidgets); // Silent / paused
-    });
+        // Daily summary must separately reflect 15m active vs 1h connection
+        expect(find.text('15m'), findsWidgets); // Active listening
+        expect(find.text('1h'), findsWidgets); // Bluetooth connected
+        expect(find.text('45m'), findsWidgets); // Silent / paused
+      },
+    );
   });
 
   group('Analytics View Widget Tests', () {
@@ -351,99 +460,127 @@ void main() {
       expect(find.text('Daily Trend (30 days)'), findsOneWidget);
     });
 
-    testWidgets('10. Summary metrics display correctly using AnalyticsCalculator', (tester) async {
-      final now = DateTime.now();
-      final start = DateTime(now.year, now.month, now.day, 11, 0, 0);
-      final end = start.add(const Duration(minutes: 50));
+    testWidgets(
+      '10. Summary metrics display correctly using AnalyticsCalculator',
+      (tester) async {
+        final now = DateTime.now();
+        final start = DateTime(now.year, now.month, now.day, 11, 0, 0);
+        final end = start.add(const Duration(minutes: 50));
 
-      await db.saveConnectionRecord(ConnectionRecord(
-        id: 'conn-a',
-        deviceId: 'dev-1',
-        deviceName: 'Pixel Buds Pro',
-        deviceType: 'Bluetooth Earbuds',
-        connectedAt: start,
-        disconnectedAt: end,
-        durationSeconds: 3000,
-      ));
+        await db.saveConnectionRecord(
+          ConnectionRecord(
+            id: 'conn-a',
+            deviceId: 'dev-1',
+            deviceName: 'Pixel Buds Pro',
+            deviceType: 'Bluetooth Earbuds',
+            connectedAt: start,
+            disconnectedAt: end,
+            durationSeconds: 3000,
+          ),
+        );
 
-      await db.saveDeviceSession(ListeningSession(
-        id: 'sess-a',
-        deviceId: 'dev-1',
-        deviceName: 'Pixel Buds Pro',
-        deviceType: 'Bluetooth Earbuds',
-        connectedAt: start,
-        disconnectedAt: end,
-        listeningStartedAt: start,
-        listeningEndedAt: end,
-        connectedDurationSeconds: 3000,
-        activeListeningDurationSeconds: 1500, // 50% ratio
-        silentDurationSeconds: 1500,
-        status: 'completed',
-      ));
+        await db.saveDeviceSession(
+          ListeningSession(
+            id: 'sess-a',
+            deviceId: 'dev-1',
+            deviceName: 'Pixel Buds Pro',
+            deviceType: 'Bluetooth Earbuds',
+            connectedAt: start,
+            disconnectedAt: end,
+            listeningStartedAt: start,
+            listeningEndedAt: end,
+            connectedDurationSeconds: 3000,
+            activeListeningDurationSeconds: 1500, // 50% ratio
+            silentDurationSeconds: 1500,
+            status: 'completed',
+          ),
+        );
 
-      await tester.pumpWidget(buildTestApp(child: AnalyticsView(database: db)));
-      await tester.pumpAndSettle();
+        await tester.pumpWidget(
+          buildTestApp(child: AnalyticsView(database: db)),
+        );
+        await tester.pumpAndSettle();
 
-      // Check summary fields (1500s -> 25m, 3000s -> 50m)
-      expect(find.text('Total Listening Time'), findsOneWidget);
-      expect(find.text('25m'), findsWidgets);
-      expect(find.text('Total Bluetooth Time'), findsOneWidget);
-      expect(find.text('50m'), findsWidgets);
-      expect(find.text('Listening Ratio'), findsOneWidget);
-      expect(find.text('50.0%'), findsWidgets); // 1500 / 3000 = 50.0%
-      expect(find.text('Pixel Buds Pro'), findsWidgets); // Most used device
-    });
+        // Check summary fields (1500s -> 25m, 3000s -> 50m)
+        expect(find.text('Total Listening Time'), findsOneWidget);
+        expect(find.text('25m'), findsWidgets);
+        expect(find.text('Total Bluetooth Time'), findsOneWidget);
+        expect(find.text('50m'), findsWidgets);
+        expect(find.text('Listening Ratio'), findsOneWidget);
+        expect(find.text('50.0%'), findsWidgets); // 1500 / 3000 = 50.0%
+        expect(find.text('Pixel Buds Pro'), findsWidgets); // Most used device
+      },
+    );
 
-    testWidgets('11. Device breakdown displays correctly with connection-only device', (tester) async {
-      final now = DateTime.now();
-      final start = DateTime(now.year, now.month, now.day, 12, 0, 0);
-      final endActive = start.add(const Duration(minutes: 30));
+    testWidgets(
+      '11. Device breakdown displays correctly with connection-only device',
+      (tester) async {
+        final now = DateTime.now();
+        final start = DateTime(now.year, now.month, now.day, 12, 0, 0);
+        final endActive = start.add(const Duration(minutes: 30));
 
-      // Device A: has listening
-      await db.saveConnectionRecord(ConnectionRecord(
-        id: 'conn-active',
-        deviceId: 'active-headset',
-        deviceName: 'Active Headset',
-        deviceType: 'Bluetooth',
-        connectedAt: start,
-        disconnectedAt: endActive,
-        durationSeconds: 1800,
-      ));
-      await db.saveDeviceSession(ListeningSession(
-        id: 'sess-active',
-        deviceId: 'active-headset',
-        deviceName: 'Active Headset',
-        deviceType: 'Bluetooth',
-        connectedAt: start,
-        disconnectedAt: endActive,
-        listeningStartedAt: start,
-        listeningEndedAt: endActive,
-        connectedDurationSeconds: 1800,
-        activeListeningDurationSeconds: 1200,
-        silentDurationSeconds: 600,
-        status: 'completed',
-      ));
+        // Device A: has listening
+        await db.saveConnectionRecord(
+          ConnectionRecord(
+            id: 'conn-active',
+            deviceId: 'active-headset',
+            deviceName: 'Active Headset',
+            deviceType: 'Bluetooth',
+            connectedAt: start,
+            disconnectedAt: endActive,
+            durationSeconds: 1800,
+          ),
+        );
+        await db.saveDeviceSession(
+          ListeningSession(
+            id: 'sess-active',
+            deviceId: 'active-headset',
+            deviceName: 'Active Headset',
+            deviceType: 'Bluetooth',
+            connectedAt: start,
+            disconnectedAt: endActive,
+            listeningStartedAt: start,
+            listeningEndedAt: endActive,
+            connectedDurationSeconds: 1800,
+            activeListeningDurationSeconds: 1200,
+            silentDurationSeconds: 600,
+            status: 'completed',
+          ),
+        );
 
-      // Device B: Connected ONLY (no listening sessions)
-      await db.saveConnectionRecord(ConnectionRecord(
-        id: 'conn-idle',
-        deviceId: 'idle-car',
-        deviceName: 'Car Bluetooth',
-        deviceType: 'Bluetooth Car',
-        connectedAt: start,
-        disconnectedAt: start.add(const Duration(minutes: 20)),
-        durationSeconds: 1200,
-      ));
+        // Device B: Connected ONLY (no listening sessions)
+        await db.saveConnectionRecord(
+          ConnectionRecord(
+            id: 'conn-idle',
+            deviceId: 'idle-car',
+            deviceName: 'Car Bluetooth',
+            deviceType: 'Bluetooth Car',
+            connectedAt: start,
+            disconnectedAt: start.add(const Duration(minutes: 20)),
+            durationSeconds: 1200,
+          ),
+        );
 
-      await tester.pumpWidget(buildTestApp(child: AnalyticsView(database: db)));
-      await tester.pumpAndSettle();
+        await tester.pumpWidget(
+          buildTestApp(child: AnalyticsView(database: db)),
+        );
+        await tester.pumpAndSettle();
 
-      expect(find.text('Active Headset'), findsWidgets);
-      expect(find.text('Car Bluetooth'), findsOneWidget);
-      expect(find.text('CONNECTED ONLY'), findsOneWidget); // Badge for connection-only device
-    });
+        expect(find.text('Active Headset'), findsWidgets);
+        expect(find.text('Car Bluetooth'), findsOneWidget);
+        expect(
+          find.text('CONNECTED ONLY'),
+          findsOneWidget,
+        ); // Badge for connection-only device
+        expect(find.text('Listening'), findsWidgets);
+        expect(find.text('Connected'), findsWidgets);
+        expect(find.byType(LinearProgressIndicator), findsWidgets);
+      },
+    );
 
-    testWidgets('12. Daily trend displays correctly preserving empty days', (tester) async {
+    testWidgets('12. Daily trend displays correctly preserving empty days', (
+      tester,
+    ) async {
       await tester.pumpWidget(buildTestApp(child: AnalyticsView(database: db)));
       await tester.pumpAndSettle();
 
@@ -456,7 +593,9 @@ void main() {
       expect(find.text('No activity'), findsWidgets);
     });
 
-    testWidgets('13. Empty analytics state works cleanly without errors', (tester) async {
+    testWidgets('13. Empty analytics state works cleanly without errors', (
+      tester,
+    ) async {
       await tester.pumpWidget(buildTestApp(child: AnalyticsView(database: db)));
       await tester.pumpAndSettle();
 
@@ -468,7 +607,9 @@ void main() {
   });
 
   group('Responsiveness & Overflow Prevention Tests', () {
-    testWidgets('14. History at 320px logical width has no overflow', (tester) async {
+    testWidgets('14. History at 320px logical width has no overflow', (
+      tester,
+    ) async {
       tester.view.physicalSize = const Size(320, 640);
       tester.view.devicePixelRatio = 1.0;
       addTearDown(() => tester.view.resetPhysicalSize());
@@ -480,7 +621,9 @@ void main() {
       expect(find.text('Daily Summary'), findsOneWidget);
     });
 
-    testWidgets('15. Analytics at 320px logical width has no overflow', (tester) async {
+    testWidgets('15. Analytics at 320px logical width has no overflow', (
+      tester,
+    ) async {
       tester.view.physicalSize = const Size(320, 640);
       tester.view.devicePixelRatio = 1.0;
       addTearDown(() => tester.view.resetPhysicalSize());
@@ -492,7 +635,9 @@ void main() {
       expect(find.text('Period Summary'), findsOneWidget);
     });
 
-    testWidgets('16. History at 360px logical width has no overflow', (tester) async {
+    testWidgets('16. History at 360px logical width has no overflow', (
+      tester,
+    ) async {
       tester.view.physicalSize = const Size(360, 800);
       tester.view.devicePixelRatio = 1.0;
       addTearDown(() => tester.view.resetPhysicalSize());
@@ -504,7 +649,9 @@ void main() {
       expect(find.text('Daily Summary'), findsOneWidget);
     });
 
-    testWidgets('17. Analytics at 360px logical width has no overflow', (tester) async {
+    testWidgets('17. Analytics at 360px logical width has no overflow', (
+      tester,
+    ) async {
       tester.view.physicalSize = const Size(360, 800);
       tester.view.devicePixelRatio = 1.0;
       addTearDown(() => tester.view.resetPhysicalSize());
@@ -516,26 +663,30 @@ void main() {
       expect(find.text('Period Summary'), findsOneWidget);
     });
 
-    testWidgets('18. Increased text scaling (1.8x) does not cause RenderFlex overflow', (tester) async {
-      tester.view.physicalSize = const Size(320, 640);
-      tester.view.devicePixelRatio = 1.0;
-      addTearDown(() => tester.view.resetPhysicalSize());
+    testWidgets(
+      '18. Increased text scaling (1.8x) does not cause RenderFlex overflow',
+      (tester) async {
+        tester.view.physicalSize = const Size(320, 640);
+        tester.view.devicePixelRatio = 1.0;
+        addTearDown(() => tester.view.resetPhysicalSize());
 
-      // Test History with 1.8x text scaling
-      await tester.pumpWidget(buildTestApp(
-        child: HistoryView(database: db),
-        textScaleFactor: 1.8,
-      ));
-      await tester.pumpAndSettle();
-      expect(tester.takeException(), isNull);
+        // Test History with 1.8x text scaling
+        await tester.pumpWidget(
+          buildTestApp(child: HistoryView(database: db), textScaleFactor: 1.8),
+        );
+        await tester.pumpAndSettle();
+        expect(tester.takeException(), isNull);
 
-      // Test Analytics with 1.8x text scaling
-      await tester.pumpWidget(buildTestApp(
-        child: AnalyticsView(database: db),
-        textScaleFactor: 1.8,
-      ));
-      await tester.pumpAndSettle();
-      expect(tester.takeException(), isNull);
-    });
+        // Test Analytics with 1.8x text scaling
+        await tester.pumpWidget(
+          buildTestApp(
+            child: AnalyticsView(database: db),
+            textScaleFactor: 1.8,
+          ),
+        );
+        await tester.pumpAndSettle();
+        expect(tester.takeException(), isNull);
+      },
+    );
   });
 }

@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+
 import '../database/database_adapter.dart';
 import '../models/listening_session.dart';
 import '../models/period_stats.dart';
@@ -8,10 +9,7 @@ import '../models/period_stats.dart';
 class HistoryView extends StatefulWidget {
   final DatabaseAdapter database;
 
-  const HistoryView({
-    super.key,
-    required this.database,
-  });
+  const HistoryView({super.key, required this.database});
 
   @override
   State<HistoryView> createState() => HistoryViewState();
@@ -60,7 +58,10 @@ class HistoryViewState extends State<HistoryView> {
 
     // PeriodStats guarantees: totalConnectedSeconds comes strictly from connection_records
     final stats = await widget.database.getPeriodStats(startOfDay, endOfDay);
-    final sessions = await widget.database.getDeviceSessionsForDateRange(startOfDay, endOfDay);
+    final sessions = await widget.database.getDeviceSessionsForDateRange(
+      startOfDay,
+      endOfDay,
+    );
 
     if (mounted) {
       setState(() {
@@ -138,8 +139,18 @@ class HistoryViewState extends State<HistoryView> {
 
     final weekdays = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
     final months = [
-      'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
-      'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'
+      'Jan',
+      'Feb',
+      'Mar',
+      'Apr',
+      'May',
+      'Jun',
+      'Jul',
+      'Aug',
+      'Sep',
+      'Oct',
+      'Nov',
+      'Dec',
     ];
     return '${weekdays[date.weekday - 1]}, ${months[date.month - 1]} ${date.day}, ${date.year}';
   }
@@ -182,7 +193,8 @@ class HistoryViewState extends State<HistoryView> {
 
   Widget _buildDateSelector() {
     final now = DateTime.now();
-    final isToday = DateTime(_selectedDate.year, _selectedDate.month, _selectedDate.day) ==
+    final isToday =
+        DateTime(_selectedDate.year, _selectedDate.month, _selectedDate.day) ==
         DateTime(now.year, now.month, now.day);
 
     return Card(
@@ -200,11 +212,18 @@ class HistoryViewState extends State<HistoryView> {
                 onTap: _pickDate,
                 borderRadius: BorderRadius.circular(6),
                 child: Padding(
-                  padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 4),
+                  padding: const EdgeInsets.symmetric(
+                    vertical: 8,
+                    horizontal: 4,
+                  ),
                   child: Row(
                     mainAxisAlignment: MainAxisAlignment.center,
                     children: [
-                      const Icon(Icons.calendar_today, size: 16, color: Colors.tealAccent),
+                      const Icon(
+                        Icons.calendar_today,
+                        size: 16,
+                        color: Colors.tealAccent,
+                      ),
                       const SizedBox(width: 8),
                       Flexible(
                         child: Text(
@@ -232,7 +251,10 @@ class HistoryViewState extends State<HistoryView> {
               TextButton(
                 style: TextButton.styleFrom(
                   visualDensity: VisualDensity.compact,
-                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 8,
+                    vertical: 4,
+                  ),
                   minimumSize: Size.zero,
                   tapTargetSize: MaterialTapTargetSize.shrinkWrap,
                 ),
@@ -249,9 +271,15 @@ class HistoryViewState extends State<HistoryView> {
   Widget _buildDailySummaryCard() {
     final stats = _dayStats ?? PeriodStats.empty(_selectedDate, _selectedDate);
 
-    return Card(
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: const Color(0xFF142229),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: Colors.tealAccent.withValues(alpha: 0.2)),
+      ),
       child: Padding(
-        padding: const EdgeInsets.all(12),
+        padding: EdgeInsets.zero,
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
@@ -296,10 +324,7 @@ class HistoryViewState extends State<HistoryView> {
               stats.totalSilentFormatted,
               valueColor: Colors.grey.shade300,
             ),
-            _buildSummaryRow(
-              'Listening Sessions',
-              '${stats.sessionCount}',
-            ),
+            _buildSummaryRow('Listening Sessions', '${stats.sessionCount}'),
             _buildSummaryRow(
               'Longest Session',
               stats.longestSessionFormatted,
@@ -341,6 +366,7 @@ class HistoryViewState extends State<HistoryView> {
                 fontSize: 13,
                 fontWeight: isBold ? FontWeight.bold : FontWeight.w500,
                 color: valueColor ?? Colors.white,
+                fontFeatures: const [FontFeature.tabularFigures()],
               ),
             ),
           ),
@@ -352,14 +378,24 @@ class HistoryViewState extends State<HistoryView> {
   Widget _buildSessionsListHeader() {
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 4),
-      child: Text(
-        'Recorded Sessions (${_sessions.length})',
-        style: TextStyle(
-          fontSize: 13,
-          fontWeight: FontWeight.bold,
-          color: Colors.teal.shade300,
-          letterSpacing: 0.8,
-        ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            'Recorded Sessions (${_sessions.length})',
+            style: TextStyle(
+              fontSize: 13,
+              fontWeight: FontWeight.bold,
+              color: Colors.teal.shade300,
+              letterSpacing: 0.8,
+            ),
+          ),
+          const SizedBox(height: 3),
+          Text(
+            'Each card represents one saved device session.',
+            style: TextStyle(fontSize: 11, color: Colors.grey.shade500),
+          ),
+        ],
       ),
     );
   }
@@ -371,6 +407,12 @@ class HistoryViewState extends State<HistoryView> {
         : 'Active';
 
     return Card(
+      key: Key('history_session_${s.id}'),
+      color: const Color(0xFF171C23),
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(12),
+        side: BorderSide(color: Colors.tealAccent.withValues(alpha: 0.12)),
+      ),
       margin: const EdgeInsets.only(bottom: 8),
       child: Padding(
         padding: const EdgeInsets.all(12),
