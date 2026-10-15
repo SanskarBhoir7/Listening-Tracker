@@ -149,14 +149,14 @@ void main() {
         expect(
           find.descendant(
             of: find.byKey(const Key('history_session_history-map-first')),
-          matching: find.text('10m 0s'),
+            matching: find.text('10m 0s'),
           ),
           findsOneWidget,
         );
         expect(
           find.descendant(
             of: find.byKey(const Key('history_session_history-map-second')),
-          matching: find.text('5m 0s'),
+            matching: find.text('5m 0s'),
           ),
           findsOneWidget,
         );
@@ -607,6 +607,31 @@ void main() {
   });
 
   group('Responsiveness & Overflow Prevention Tests', () {
+    testWidgets(
+      'History and Analytics fit the supported width and text matrix',
+      (tester) async {
+        for (final width in [320.0, 360.0, 390.0, 430.0]) {
+          for (final textScale in [1.0, 1.8]) {
+            tester.view.physicalSize = Size(width, 800);
+            tester.view.devicePixelRatio = 1.0;
+            for (final child in [
+              HistoryView(database: db),
+              AnalyticsView(database: db),
+            ]) {
+              await tester.pumpWidget(
+                buildTestApp(child: child, textScaleFactor: textScale),
+              );
+              await tester.pumpAndSettle();
+              expect(
+                tester.takeException(),
+                isNull,
+                reason: '${child.runtimeType} $width px, $textScale×',
+              );
+            }
+          }
+        }
+      },
+    );
     testWidgets('14. History at 320px logical width has no overflow', (
       tester,
     ) async {

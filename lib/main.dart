@@ -2,8 +2,8 @@ import 'dart:async';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 
+import 'app_theme.dart';
 import 'audio_monitor_service.dart';
 import 'database/database_adapter.dart';
 import 'database/database_helper.dart';
@@ -13,8 +13,9 @@ import 'tracking_state.dart';
 import 'services/diagnostic_logger.dart';
 import 'views/analytics_view.dart';
 import 'views/break_settings_view.dart';
-import 'views/diagnostic_log_viewer.dart';
+import 'views/developer_tools_view.dart';
 import 'views/history_view.dart';
+import 'widgets/soundspan_logo.dart';
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
@@ -27,27 +28,8 @@ class ListeningTrackerApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'Listening Tracker — Phase 3',
-      theme: ThemeData(
-        brightness: Brightness.dark,
-        useMaterial3: true,
-        colorScheme:
-            ColorScheme.fromSeed(
-              seedColor: const Color(0xFF00F5D4),
-              brightness: Brightness.dark,
-              surface: const Color(0xFF151B23),
-            ).copyWith(
-              primary: const Color(0xFF00F5D4),
-              secondary: const Color(0xFF2CE59B),
-              surface: const Color(0xFF151B23),
-            ),
-        scaffoldBackgroundColor: const Color(0xFF0B1016),
-        appBarTheme: const AppBarTheme(
-          backgroundColor: Color(0xFF0F151D),
-          foregroundColor: Colors.white,
-          surfaceTintColor: Colors.transparent,
-        ),
-      ),
+      title: 'SoundSpan',
+      theme: ListeningTheme.dark,
       home: const MonitorDashboard(),
       debugShowCheckedModeBanner: false,
     );
@@ -89,10 +71,6 @@ class _MonitorDashboardState extends State<MonitorDashboard>
   // Permissions state
   Map<String, bool> _permissions = {};
 
-  // Event log
-  final List<String> _eventLog = [];
-  static const int _maxLogEntries = 250;
-
   @override
   void initState() {
     super.initState();
@@ -130,7 +108,6 @@ class _MonitorDashboardState extends State<MonitorDashboard>
       source: 'flutter',
     );
     await _engine.initialize();
-    await _loadPersistedLogs();
     await _checkPermissions();
     await _importNativeLifecycleEvents();
     _ensureSubscribedToEvents();
@@ -158,31 +135,6 @@ class _MonitorDashboardState extends State<MonitorDashboard>
       if (persisted != null) importedIds.add(event['id'] as String);
     }
     await _audioService.acknowledgeNativeLifecycleEvents(importedIds);
-  }
-
-  Future<void> _loadPersistedLogs() async {
-    try {
-      final savedEvents = await _database.getDiagnosticEvents(limit: 50);
-      if (mounted && savedEvents.isNotEmpty) {
-        setState(() {
-          _eventLog.clear();
-          for (final event in savedEvents) {
-            String line = '${event.timeClock} ${event.eventType}';
-            if (event.deviceName != null && event.deviceName!.isNotEmpty) {
-              line += ' | ${event.deviceName}';
-            }
-            if (event.playbackSignalsSummary.isNotEmpty) {
-              line += ' (${event.playbackSignalsSummary})';
-            } else if (event.reason != null && event.reason!.isNotEmpty) {
-              line += ' (${event.reason})';
-            }
-            _eventLog.add(line);
-          }
-        });
-      }
-    } catch (e) {
-      debugPrint('Failed to load persisted diagnostic logs: $e');
-    }
   }
 
   void _ensureSubscribedToEvents() {
@@ -373,19 +325,7 @@ class _MonitorDashboardState extends State<MonitorDashboard>
   }
 
   void _addLogEntry(String entry) {
-    final now = DateTime.now();
-    final timeStr =
-        '${now.hour.toString().padLeft(2, '0')}:${now.minute.toString().padLeft(2, '0')}:${now.second.toString().padLeft(2, '0')}';
-    final logLine = '$timeStr $entry';
-
-    if (mounted) {
-      setState(() {
-        _eventLog.insert(0, logLine);
-        if (_eventLog.length > _maxLogEntries) {
-          _eventLog.removeLast();
-        }
-      });
-    }
+    debugPrint('ListeningTracker: $entry');
   }
 
   String _computeCurrentState() {
@@ -411,9 +351,9 @@ class _MonitorDashboardState extends State<MonitorDashboard>
 
   Color _getStateColor(String state) {
     if (state.startsWith('LISTENING')) {
-      return Colors.greenAccent.shade400;
+      return ListeningPalette.mint;
     } else if (state.startsWith('PAUSED')) {
-      return Colors.amberAccent.shade400;
+      return ListeningPalette.amber;
     } else if (state.startsWith('CONNECTED')) {
       return Colors.lightBlueAccent.shade400;
     } else if (state.startsWith('PLAYING')) {
@@ -431,30 +371,81 @@ class _MonitorDashboardState extends State<MonitorDashboard>
     String appTitle;
     switch (_selectedTabIndex) {
       case 1:
-        appTitle = 'LISTENING HISTORY';
+        appTitle = 'History';
         break;
       case 2:
-        appTitle = 'LISTENING ANALYTICS';
+        appTitle = 'Analytics';
         break;
       default:
-        appTitle = 'LISTENING TRACKER — LIVE MONITOR';
+        appTitle = 'Live Monitor';
     }
 
     return Scaffold(
       appBar: AppBar(
-        title: FittedBox(
-          fit: BoxFit.scaleDown,
-          child: Text(
-            appTitle,
-            style: const TextStyle(
-              fontSize: 16,
-              fontWeight: FontWeight.bold,
-              letterSpacing: 1.1,
-            ),
-          ),
-        ),
-        centerTitle: true,
+        title: _selectedTabIndex == 0
+            ? LayoutBuilder(
+                builder: (context, constraints) => Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const SoundSpanLogo(key: Key('soundspan_logo'), size: 26),
+                    const SizedBox(width: 9),
+                    Flexible(
+                      child: Text(
+                        key: const Key('screen_title'),
+                        'SoundSpan',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
+                    if (constraints.maxWidth >= 190) ...[
+                      const SizedBox(width: 9),
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 8,
+                          vertical: 3,
+                        ),
+                        decoration: BoxDecoration(
+                          color: ListeningPalette.surfaceRaised,
+                          borderRadius: BorderRadius.circular(99),
+                        ),
+                        child: Text(
+                          'Live',
+                          style: Theme.of(context).textTheme.labelSmall
+                              ?.copyWith(
+                                color: ListeningPalette.muted,
+                                fontWeight: FontWeight.w600,
+                              ),
+                        ),
+                      ),
+                    ],
+                  ],
+                ),
+              )
+            : Text(
+                key: const Key('screen_title'),
+                appTitle,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
+        centerTitle: false,
         actions: [
+          if (kDebugMode)
+            IconButton(
+              key: const Key('appbar_developer_tools_button'),
+              icon: const Icon(Icons.code_rounded),
+              tooltip: 'Developer tools',
+              onPressed: () {
+                Navigator.of(context).push(
+                  MaterialPageRoute<void>(
+                    builder: (_) => DeveloperToolsView(
+                      engine: _engine,
+                      database: _database,
+                      audioService: _audioService,
+                    ),
+                  ),
+                );
+              },
+            ),
           IconButton(
             key: const Key('appbar_break_settings_button'),
             icon: const Icon(Icons.timer_outlined),
@@ -498,9 +489,7 @@ class _MonitorDashboardState extends State<MonitorDashboard>
         ],
       ),
       bottomNavigationBar: NavigationBar(
-        backgroundColor: const Color(0xFF101720),
-        indicatorColor: const Color(0xFF00F5D4).withValues(alpha: 0.16),
-        height: 68,
+        height: 72,
         selectedIndex: _selectedTabIndex,
         onDestinationSelected: (int index) {
           setState(() {
@@ -538,11 +527,11 @@ class _MonitorDashboardState extends State<MonitorDashboard>
           const SizedBox(height: 12),
           _buildStateIndicator(currentState, stateColor),
           const SizedBox(height: 12),
-          _buildControlButton(),
+          _buildDualDurationCard(),
           const SizedBox(height: 12),
           _buildBreakStatusCard(),
           const SizedBox(height: 12),
-          _buildDualDurationCard(),
+          _buildControlButton(),
           const SizedBox(height: 12),
           _buildLiveSessionCard(),
           const SizedBox(height: 12),
@@ -553,8 +542,6 @@ class _MonitorDashboardState extends State<MonitorDashboard>
           _buildTodaySummaryCard(),
           const SizedBox(height: 12),
           _buildRecentSessionsCard(),
-          const SizedBox(height: 12),
-          _buildEventLog(),
           const SizedBox(height: 16),
         ],
       ),
@@ -575,7 +562,7 @@ class _MonitorDashboardState extends State<MonitorDashboard>
     if (allGranted) return const SizedBox.shrink();
 
     return Card(
-      color: Colors.amber.shade900.withValues(alpha: 0.35),
+      color: ListeningPalette.surface,
       child: Padding(
         padding: const EdgeInsets.all(12),
         child: Column(
@@ -592,7 +579,9 @@ class _MonitorDashboardState extends State<MonitorDashboard>
                 child: Text(
                   '${entry.key}: ${entry.value ? "✅ Granted" : "❌ Not granted"}',
                   style: TextStyle(
-                    color: entry.value ? Colors.greenAccent : Colors.redAccent,
+                    color: entry.value
+                        ? ListeningPalette.mint
+                        : Colors.redAccent,
                     fontSize: 12,
                   ),
                 ),
@@ -604,8 +593,8 @@ class _MonitorDashboardState extends State<MonitorDashboard>
               icon: const Icon(Icons.security, size: 16),
               label: const Text('Grant Permissions'),
               style: ElevatedButton.styleFrom(
-                backgroundColor: Colors.amber.shade800,
-                foregroundColor: Colors.white,
+                backgroundColor: ListeningPalette.amber,
+                foregroundColor: ListeningPalette.background,
                 padding: const EdgeInsets.symmetric(
                   horizontal: 16,
                   vertical: 8,
@@ -633,9 +622,13 @@ class _MonitorDashboardState extends State<MonitorDashboard>
           ),
         ),
         style: ElevatedButton.styleFrom(
-          backgroundColor: isMon ? Colors.red.shade800 : Colors.teal.shade700,
-          foregroundColor: Colors.white,
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+          backgroundColor: isMon
+              ? ListeningPalette.urgent
+              : ListeningPalette.mint,
+          foregroundColor: ListeningPalette.background,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(14),
+          ),
         ),
       ),
     );
@@ -648,11 +641,7 @@ class _MonitorDashboardState extends State<MonitorDashboard>
     return Container(
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
-        gradient: LinearGradient(
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-          colors: [stateColor.withValues(alpha: 0.18), const Color(0xFF151B23)],
-        ),
+        color: ListeningPalette.surface,
         borderRadius: BorderRadius.circular(16),
         border: Border.all(
           color: stateColor.withValues(alpha: 0.65),
@@ -671,7 +660,7 @@ class _MonitorDashboardState extends State<MonitorDashboard>
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
-                      'CURRENT STATE',
+                      'MONITOR STATUS',
                       style: TextStyle(
                         color: Colors.grey.shade400,
                         fontSize: 10,
@@ -765,7 +754,7 @@ class _MonitorDashboardState extends State<MonitorDashboard>
                 'Grace Period: ${remainingGrace.inSeconds}s remaining',
                 style: const TextStyle(
                   fontSize: 12,
-                  color: Colors.amberAccent,
+                  color: ListeningPalette.amber,
                   fontWeight: FontWeight.bold,
                 ),
               ),
@@ -781,139 +770,98 @@ class _MonitorDashboardState extends State<MonitorDashboard>
         _engine.connectionState == BluetoothConnectionState.connected;
     final isListening = _engine.sessionState == ListeningSessionState.active;
     final inGrace = _engine.sessionState == ListeningSessionState.gracePeriod;
+    final listeningColor = isListening
+        ? ListeningPalette.mint
+        : inGrace
+        ? ListeningPalette.amber
+        : ListeningPalette.muted;
 
     return Card(
-      color: const Color(0xFF151B23),
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(14),
-        side: BorderSide(color: Colors.white.withValues(alpha: 0.08)),
-      ),
       child: Padding(
-        padding: const EdgeInsets.all(10),
-        child: Row(
+        padding: const EdgeInsets.all(18),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            // Connection Duration Box
-            Expanded(
-              child: Container(
-                padding: const EdgeInsets.symmetric(
-                  vertical: 12,
-                  horizontal: 10,
-                ),
-                decoration: BoxDecoration(
-                  color: Colors.cyan.shade900.withValues(alpha: 0.25),
-                  borderRadius: BorderRadius.circular(10),
-                  border: Border.all(
-                    color: isBtConnected
-                        ? Colors.cyanAccent.shade400
-                        : Colors.cyan.shade900,
-                    width: 1.5,
-                  ),
-                ),
-                child: Column(
-                  children: [
-                    Text(
-                      'CONNECTION TIME',
-                      style: TextStyle(
-                        color: Colors.cyanAccent.shade100,
-                        fontSize: 10,
-                        fontWeight: FontWeight.bold,
-                        letterSpacing: 0.8,
-                      ),
-                    ),
-                    const SizedBox(height: 4),
-                    FittedBox(
-                      fit: BoxFit.scaleDown,
-                      child: Text(
-                        _engine.liveConnectedFormatted,
-                        style: const TextStyle(
-                          fontSize: 22,
-                          fontWeight: FontWeight.bold,
-                          color: Colors.white,
-                          fontFamily: 'monospace',
-                        ),
-                      ),
-                    ),
-                    const SizedBox(height: 2),
-                    Text(
-                      isBtConnected ? 'Connected' : 'Disconnected',
-                      style: TextStyle(
-                        fontSize: 11,
-                        color: isBtConnected
-                            ? Colors.cyanAccent
-                            : Colors.grey.shade500,
-                      ),
-                    ),
-                  ],
+            Text(
+              'LISTENING TIME',
+              style: Theme.of(context).textTheme.labelMedium?.copyWith(
+                color: ListeningPalette.muted,
+                fontWeight: FontWeight.w700,
+                letterSpacing: 1.2,
+              ),
+            ),
+            const SizedBox(height: 4),
+            FittedBox(
+              alignment: Alignment.centerLeft,
+              fit: BoxFit.scaleDown,
+              child: Text(
+                _engine.liveActiveListeningFormatted,
+                key: const Key('primary_listening_timer'),
+                style: TextStyle(
+                  fontSize: 48,
+                  height: 1.1,
+                  fontWeight: FontWeight.w700,
+                  color: listeningColor,
+                  fontFeatures: const [FontFeature.tabularFigures()],
                 ),
               ),
             ),
-            const SizedBox(width: 10),
-            // Listening Duration Box
-            Expanded(
-              child: Container(
-                padding: const EdgeInsets.symmetric(
-                  vertical: 12,
-                  horizontal: 10,
+            const SizedBox(height: 4),
+            Text(
+              isListening
+                  ? 'Audio is playing'
+                  : inGrace
+                  ? 'Playback paused · session continues briefly'
+                  : isBtConnected
+                  ? 'Headphones connected · waiting for audio'
+                  : 'Listening time starts when audio plays',
+              style: Theme.of(context).textTheme.bodySmall
+                  ?.copyWith(color: ListeningPalette.muted),
+            ),
+            const SizedBox(height: 14),
+            Wrap(
+              spacing: 16,
+              runSpacing: 8,
+              children: [
+                _compactMetric(
+                  'Connected',
+                  _engine.liveConnectedFormatted,
+                  color: isBtConnected
+                      ? ListeningPalette.cyan
+                      : ListeningPalette.muted,
                 ),
-                decoration: BoxDecoration(
-                  color: Colors.green.shade900.withValues(alpha: 0.25),
-                  borderRadius: BorderRadius.circular(10),
-                  border: Border.all(
-                    color: isListening
-                        ? Colors.greenAccent.shade400
-                        : inGrace
-                        ? Colors.amberAccent.shade400
-                        : Colors.green.shade900,
-                    width: 1.5,
-                  ),
+                _compactMetric(
+                  'Silent / paused',
+                  _engine.liveSilentFormatted,
+                  color: ListeningPalette.muted,
                 ),
-                child: Column(
-                  children: [
-                    Text(
-                      'LISTENING TIME',
-                      style: TextStyle(
-                        color: Colors.greenAccent.shade100,
-                        fontSize: 10,
-                        fontWeight: FontWeight.bold,
-                        letterSpacing: 0.8,
-                      ),
-                    ),
-                    const SizedBox(height: 4),
-                    FittedBox(
-                      fit: BoxFit.scaleDown,
-                      child: Text(
-                        _engine.liveActiveListeningFormatted,
-                        style: const TextStyle(
-                          fontSize: 22,
-                          fontWeight: FontWeight.bold,
-                          color: Colors.white,
-                          fontFamily: 'monospace',
-                        ),
-                      ),
-                    ),
-                    const SizedBox(height: 2),
-                    Text(
-                      isListening
-                          ? 'Listening'
-                          : inGrace
-                          ? 'Paused (Grace)'
-                          : 'Not listening',
-                      style: TextStyle(
-                        fontSize: 11,
-                        color: isListening
-                            ? Colors.greenAccent
-                            : inGrace
-                            ? Colors.amberAccent
-                            : Colors.grey.shade500,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
+              ],
             ),
           ],
         ),
       ),
+    );
+  }
+
+  Widget _compactMetric(String label, String value, {required Color color}) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Text(
+          label,
+          style: TextStyle(color: ListeningPalette.muted, fontSize: 12),
+        ),
+        const SizedBox(height: 2),
+        Text(
+          value,
+          style: TextStyle(
+            color: color,
+            fontWeight: FontWeight.w700,
+            fontFeatures: const [FontFeature.tabularFigures()],
+          ),
+        ),
+      ],
     );
   }
 
@@ -932,7 +880,7 @@ class _MonitorDashboardState extends State<MonitorDashboard>
 
     return Card(
       key: const Key('break_status_card'),
-      color: Colors.grey.shade900,
+      color: ListeningPalette.surface,
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(12),
         side: BorderSide(
@@ -967,7 +915,7 @@ class _MonitorDashboardState extends State<MonitorDashboard>
                         child: FittedBox(
                           fit: BoxFit.scaleDown,
                           child: Text(
-                            'BREAK ENGINE',
+                            'Break reminders',
                             style: TextStyle(
                               fontWeight: FontWeight.bold,
                               fontSize: 13,
@@ -980,7 +928,7 @@ class _MonitorDashboardState extends State<MonitorDashboard>
                       IconButton(
                         key: const Key('break_engine_settings_icon_button'),
                         icon: const Icon(Icons.settings, size: 18),
-                        color: Colors.tealAccent,
+                        color: ListeningPalette.mint,
                         padding: const EdgeInsets.all(2),
                         constraints: const BoxConstraints(
                           minWidth: 28,
@@ -1003,37 +951,6 @@ class _MonitorDashboardState extends State<MonitorDashboard>
                 Row(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    if (breakState.isSimulated) ...[
-                      FittedBox(
-                        fit: BoxFit.scaleDown,
-                        child: Container(
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 6,
-                            vertical: 2,
-                          ),
-                          decoration: BoxDecoration(
-                            color: Colors.purple.shade900.withValues(
-                              alpha: 0.6,
-                            ),
-                            borderRadius: BorderRadius.circular(4),
-                            border: Border.all(
-                              color: Colors.purpleAccent,
-                              width: 0.8,
-                            ),
-                          ),
-                          child: const Text(
-                            'SIMULATED',
-                            style: TextStyle(
-                              fontSize: 9,
-                              fontWeight: FontWeight.bold,
-                              color: Colors.purpleAccent,
-                              letterSpacing: 0.6,
-                            ),
-                          ),
-                        ),
-                      ),
-                      const SizedBox(width: 6),
-                    ],
                     FittedBox(
                       fit: BoxFit.scaleDown,
                       child: Container(
@@ -1125,7 +1042,7 @@ class _MonitorDashboardState extends State<MonitorDashboard>
                                 breakState.timeUntilNextThreshold ==
                                     Duration.zero
                                 ? Colors.grey.shade500
-                                : Colors.tealAccent,
+                                : ListeningPalette.mint,
                             fontFamily: 'monospace',
                           ),
                         ),
@@ -1220,7 +1137,7 @@ class _MonitorDashboardState extends State<MonitorDashboard>
                             : 'Snooze',
                       ),
                       style: ElevatedButton.styleFrom(
-                        backgroundColor: Colors.amberAccent.shade700,
+                        backgroundColor: ListeningPalette.amber,
                         foregroundColor: Colors.black,
                         padding: const EdgeInsets.symmetric(vertical: 8),
                         textStyle: const TextStyle(
@@ -1290,155 +1207,12 @@ class _MonitorDashboardState extends State<MonitorDashboard>
                         'Configure',
                         style: TextStyle(
                           fontSize: 11,
-                          color: Colors.tealAccent,
+                          color: ListeningPalette.mint,
                           fontWeight: FontWeight.bold,
                         ),
                       ),
                     ],
                   ),
-                ),
-              ),
-            ],
-            if (kDebugMode) ...[
-              const SizedBox(height: 12),
-              Container(
-                padding: const EdgeInsets.all(10),
-                decoration: BoxDecoration(
-                  color: Colors.black38,
-                  borderRadius: BorderRadius.circular(8),
-                  border: Border.all(
-                    color: Colors.purpleAccent.withValues(alpha: 0.4),
-                    width: 1,
-                  ),
-                ),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Row(
-                      children: [
-                        const Icon(
-                          Icons.bug_report,
-                          size: 14,
-                          color: Colors.purpleAccent,
-                        ),
-                        const SizedBox(width: 6),
-                        Flexible(
-                          child: FittedBox(
-                            fit: BoxFit.scaleDown,
-                            alignment: Alignment.centerLeft,
-                            child: Text(
-                              'DEBUG TEST SIMULATION',
-                              style: TextStyle(
-                                fontSize: 10,
-                                fontWeight: FontWeight.bold,
-                                color: Colors.purpleAccent.shade100,
-                                letterSpacing: 0.8,
-                              ),
-                            ),
-                          ),
-                        ),
-                        if (breakState.isSimulated) ...[
-                          const SizedBox(width: 6),
-                          FittedBox(
-                            fit: BoxFit.scaleDown,
-                            child: Text(
-                              '+${_engine.breakEngine.debugSimulatedOffset.inMinutes}m added',
-                              style: const TextStyle(
-                                fontSize: 10,
-                                color: Colors.purpleAccent,
-                                fontFamily: 'monospace',
-                              ),
-                            ),
-                          ),
-                        ],
-                      ],
-                    ),
-                    const SizedBox(height: 8),
-                    Wrap(
-                      spacing: 8,
-                      runSpacing: 6,
-                      children: [
-                        OutlinedButton(
-                          key: const Key('btn_simulate_45m'),
-                          onPressed: () {
-                            _engine.debugSimulateContinuousListening(
-                              const Duration(minutes: 45),
-                            );
-                          },
-                          style: OutlinedButton.styleFrom(
-                            visualDensity: VisualDensity.compact,
-                            side: const BorderSide(color: Colors.amberAccent),
-                            foregroundColor: Colors.amberAccent,
-                            padding: const EdgeInsets.symmetric(
-                              horizontal: 8,
-                              vertical: 4,
-                            ),
-                          ),
-                          child: const FittedBox(
-                            fit: BoxFit.scaleDown,
-                            child: Text(
-                              '+45m (Break Soon)',
-                              style: TextStyle(fontSize: 11),
-                            ),
-                          ),
-                        ),
-                        OutlinedButton(
-                          key: const Key('btn_simulate_15m'),
-                          onPressed: () {
-                            _engine.debugSimulateContinuousListening(
-                              const Duration(minutes: 15),
-                            );
-                          },
-                          style: OutlinedButton.styleFrom(
-                            visualDensity: VisualDensity.compact,
-                            side: const BorderSide(
-                              color: Colors.deepOrangeAccent,
-                            ),
-                            foregroundColor: Colors.deepOrangeAccent,
-                            padding: const EdgeInsets.symmetric(
-                              horizontal: 8,
-                              vertical: 4,
-                            ),
-                          ),
-                          child: const FittedBox(
-                            fit: BoxFit.scaleDown,
-                            child: Text(
-                              '+15m (Reach 60m)',
-                              style: TextStyle(fontSize: 11),
-                            ),
-                          ),
-                        ),
-                        OutlinedButton(
-                          key: const Key('btn_reset_simulation'),
-                          onPressed: breakState.isSimulated
-                              ? () {
-                                  _engine.debugResetSimulatedListening();
-                                }
-                              : null,
-                          style: OutlinedButton.styleFrom(
-                            visualDensity: VisualDensity.compact,
-                            side: BorderSide(
-                              color: breakState.isSimulated
-                                  ? Colors.grey
-                                  : Colors.grey.shade800,
-                            ),
-                            foregroundColor: Colors.grey.shade300,
-                            padding: const EdgeInsets.symmetric(
-                              horizontal: 8,
-                              vertical: 4,
-                            ),
-                          ),
-                          child: const FittedBox(
-                            fit: BoxFit.scaleDown,
-                            child: Text(
-                              'Reset Sim',
-                              style: TextStyle(fontSize: 11),
-                            ),
-                          ),
-                        ),
-                      ],
-                    ),
-                  ],
                 ),
               ),
             ],
@@ -1458,7 +1232,7 @@ class _MonitorDashboardState extends State<MonitorDashboard>
                   ),
                 ),
                 style: ElevatedButton.styleFrom(
-                  backgroundColor: Colors.tealAccent,
+                  backgroundColor: ListeningPalette.mint,
                   foregroundColor: Colors.black,
                   padding: const EdgeInsets.symmetric(vertical: 10),
                   shape: RoundedRectangleBorder(
@@ -1489,11 +1263,11 @@ class _MonitorDashboardState extends State<MonitorDashboard>
     Color sessionColor;
     if (sessState == ListeningSessionState.active) {
       sessionStatus = 'Active (Listening)';
-      sessionColor = Colors.greenAccent.shade200;
+      sessionColor = ListeningPalette.mint;
     } else if (sessState == ListeningSessionState.gracePeriod) {
       final rem = _engine.gracePeriodRemaining?.inSeconds ?? 0;
       sessionStatus = 'Paused (Resuming within ${rem}s)';
-      sessionColor = Colors.amberAccent;
+      sessionColor = ListeningPalette.amber;
     } else {
       sessionStatus = isBt
           ? 'Idle (Connected, Not Listening)'
@@ -1501,16 +1275,16 @@ class _MonitorDashboardState extends State<MonitorDashboard>
       sessionColor = Colors.grey;
     }
 
-    return _buildSection('Live Session Tracking (Separated)', [
+    return _buildSection('Playback details', [
       _buildRow(
         'Bluetooth State',
         isBt ? 'Connected' : 'Disconnected',
-        valueColor: isBt ? Colors.cyanAccent : Colors.grey,
+        valueColor: isBt ? ListeningPalette.cyan : Colors.grey,
       ),
       _buildRow(
         'Audio Playback',
         isAudio ? 'Playing' : 'Not Playing',
-        valueColor: isAudio ? Colors.greenAccent : Colors.grey,
+        valueColor: isAudio ? ListeningPalette.mint : Colors.grey,
       ),
       _buildRow(
         'Listening Session',
@@ -1522,7 +1296,7 @@ class _MonitorDashboardState extends State<MonitorDashboard>
       _buildRow(
         'Audio Grace Window',
         '${_engine.gracePeriod.inMinutes} min (Audio pause only)',
-        valueColor: Colors.amberAccent.shade100,
+        valueColor: ListeningPalette.amber,
       ),
     ]);
   }
@@ -1535,7 +1309,7 @@ class _MonitorDashboardState extends State<MonitorDashboard>
       color: const Color(0xFF151B23),
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(14),
-        side: BorderSide(color: Colors.cyanAccent.withValues(alpha: 0.18)),
+        side: BorderSide(color: ListeningPalette.cyan.withValues(alpha: 0.18)),
       ),
       child: Padding(
         padding: const EdgeInsets.all(14),
@@ -1594,7 +1368,7 @@ class _MonitorDashboardState extends State<MonitorDashboard>
                       ? Icons.bluetooth
                       : Icons.headphones,
                   size: 20,
-                  color: Colors.cyanAccent.shade100,
+                  color: ListeningPalette.cyan,
                 ),
                 const SizedBox(width: 10),
                 Expanded(
@@ -1645,7 +1419,7 @@ class _MonitorDashboardState extends State<MonitorDashboard>
               style: TextStyle(
                 fontSize: 13,
                 fontWeight: FontWeight.bold,
-                color: Colors.teal.shade300,
+                color: ListeningPalette.mint,
                 letterSpacing: 0.8,
               ),
             ),
@@ -1670,12 +1444,12 @@ class _MonitorDashboardState extends State<MonitorDashboard>
                   padding: const EdgeInsets.all(8),
                   decoration: BoxDecoration(
                     color: isActive
-                        ? Colors.teal.shade900.withValues(alpha: 0.3)
-                        : Colors.grey.shade900,
+                        ? ListeningPalette.surfaceRaised.withValues(alpha: 0.3)
+                        : ListeningPalette.surface,
                     borderRadius: BorderRadius.circular(6),
                     border: Border.all(
                       color: isActive
-                          ? Colors.tealAccent
+                          ? ListeningPalette.mint
                           : Colors.grey.shade800,
                     ),
                   ),
@@ -1690,7 +1464,7 @@ class _MonitorDashboardState extends State<MonitorDashboard>
                             : Icons.headphones,
                         size: 18,
                         color: isActive
-                            ? Colors.tealAccent
+                            ? ListeningPalette.mint
                             : Colors.grey.shade400,
                       ),
                       const SizedBox(width: 8),
@@ -1770,7 +1544,7 @@ class _MonitorDashboardState extends State<MonitorDashboard>
       _buildRow(
         'Active Listening',
         stats.totalActiveListeningFormatted,
-        valueColor: Colors.greenAccent,
+        valueColor: ListeningPalette.mint,
       ),
       _buildRow('Silent / Paused', stats.totalSilentFormatted),
       _buildRow('Device Sessions', '${stats.deviceSessionCount}'),
@@ -1779,7 +1553,7 @@ class _MonitorDashboardState extends State<MonitorDashboard>
       _buildRow(
         'Longest Session',
         stats.longestContinuousFormatted,
-        valueColor: Colors.tealAccent.shade100,
+        valueColor: ListeningPalette.mint,
       ),
     ]);
   }
@@ -1804,7 +1578,7 @@ class _MonitorDashboardState extends State<MonitorDashboard>
                   style: TextStyle(
                     fontSize: 13,
                     fontWeight: FontWeight.bold,
-                    color: Colors.teal.shade300,
+                    color: ListeningPalette.mint,
                     letterSpacing: 0.8,
                   ),
                 ),
@@ -1833,7 +1607,7 @@ class _MonitorDashboardState extends State<MonitorDashboard>
                   margin: const EdgeInsets.only(bottom: 8),
                   padding: const EdgeInsets.all(10),
                   decoration: BoxDecoration(
-                    color: Colors.grey.shade900,
+                    color: ListeningPalette.surface,
                     borderRadius: BorderRadius.circular(8),
                     border: Border.all(color: Colors.grey.shade800),
                   ),
@@ -1849,7 +1623,7 @@ class _MonitorDashboardState extends State<MonitorDashboard>
                                 ? Icons.bluetooth
                                 : Icons.headphones,
                             size: 16,
-                            color: Colors.tealAccent,
+                            color: ListeningPalette.mint,
                           ),
                           const SizedBox(width: 6),
                           Expanded(
@@ -1871,7 +1645,7 @@ class _MonitorDashboardState extends State<MonitorDashboard>
                       _buildMiniRow(
                         'Listening',
                         s.activeListeningDurationFormatted,
-                        color: Colors.greenAccent,
+                        color: ListeningPalette.mint,
                       ),
                       _buildMiniRow('Silent', s.silentDurationFormatted),
                     ],
@@ -1929,7 +1703,7 @@ class _MonitorDashboardState extends State<MonitorDashboard>
               style: TextStyle(
                 fontSize: 13,
                 fontWeight: FontWeight.bold,
-                color: Colors.teal.shade300,
+                color: ListeningPalette.mint,
                 letterSpacing: 0.8,
               ),
             ),
@@ -2006,182 +1780,6 @@ class _MonitorDashboardState extends State<MonitorDashboard>
             ],
           );
         },
-      ),
-    );
-  }
-
-  Widget _buildEventLog() {
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(12),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Wrap(
-              alignment: WrapAlignment.spaceBetween,
-              crossAxisAlignment: WrapCrossAlignment.center,
-              spacing: 8,
-              runSpacing: 4,
-              children: [
-                Text(
-                  'Event Log',
-                  style: TextStyle(
-                    fontSize: 13,
-                    fontWeight: FontWeight.bold,
-                    color: Colors.teal.shade300,
-                    letterSpacing: 0.8,
-                  ),
-                ),
-                Wrap(
-                  spacing: 4,
-                  runSpacing: 4,
-                  children: [
-                    TextButton.icon(
-                      style: TextButton.styleFrom(
-                        visualDensity: VisualDensity.compact,
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 6,
-                          vertical: 2,
-                        ),
-                        minimumSize: Size.zero,
-                        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                      ),
-                      icon: const Icon(
-                        Icons.list_alt,
-                        size: 14,
-                        color: Colors.tealAccent,
-                      ),
-                      label: const Text(
-                        'View All',
-                        style: TextStyle(
-                          fontSize: 11,
-                          color: Colors.tealAccent,
-                        ),
-                      ),
-                      onPressed: () {
-                        Navigator.push(
-                          context,
-                          MaterialPageRoute(
-                            builder: (_) => DiagnosticLogViewer(
-                              database: _database,
-                              audioService: _audioService,
-                            ),
-                          ),
-                        );
-                      },
-                    ),
-                    TextButton(
-                      style: TextButton.styleFrom(
-                        visualDensity: VisualDensity.compact,
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 6,
-                          vertical: 2,
-                        ),
-                        minimumSize: Size.zero,
-                        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                      ),
-                      onPressed: () {
-                        Clipboard.setData(
-                          ClipboardData(text: _eventLog.join('\n')),
-                        );
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          const SnackBar(
-                            content: Text('Log copied to clipboard'),
-                            duration: Duration(seconds: 1),
-                          ),
-                        );
-                      },
-                      child: const Text('Copy', style: TextStyle(fontSize: 11)),
-                    ),
-                    TextButton(
-                      style: TextButton.styleFrom(
-                        visualDensity: VisualDensity.compact,
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 6,
-                          vertical: 2,
-                        ),
-                        minimumSize: Size.zero,
-                        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                      ),
-                      onPressed: () {
-                        setState(() {
-                          _eventLog.clear();
-                        });
-                      },
-                      child: const Text(
-                        'Clear',
-                        style: TextStyle(fontSize: 11),
-                      ),
-                    ),
-                  ],
-                ),
-              ],
-            ),
-            const Divider(height: 8),
-            if (_eventLog.isEmpty)
-              Padding(
-                padding: const EdgeInsets.symmetric(vertical: 16),
-                child: Text(
-                  'No events yet. Start monitoring to begin.',
-                  style: TextStyle(
-                    color: Colors.grey.shade500,
-                    fontStyle: FontStyle.italic,
-                    fontSize: 12,
-                  ),
-                ),
-              )
-            else
-              SizedBox(
-                height: 280,
-                child: ListView.builder(
-                  itemCount: _eventLog.length,
-                  itemBuilder: (context, index) {
-                    final entry = _eventLog[index];
-                    Color entryColor = Colors.grey.shade300;
-                    if (entry.contains('BT_CONNECTED') ||
-                        entry.contains('CONNECTION_STARTED') ||
-                        entry.contains('DEVICE_CONNECTED')) {
-                      entryColor = Colors.cyanAccent.shade200;
-                    } else if (entry.contains('BT_DISCONNECTED') ||
-                        entry.contains('CONNECTION_ENDED') ||
-                        entry.contains('DEVICE_DISCONNECTED')) {
-                      entryColor = Colors.red.shade300;
-                    } else if (entry.contains('LISTENING_STARTED') ||
-                        entry.contains('AUDIO_STARTED')) {
-                      entryColor = Colors.greenAccent.shade200;
-                    } else if (entry.contains('LISTENING_RESUMED') ||
-                        entry.contains('GRACE_CANCELLED')) {
-                      entryColor = Colors.tealAccent.shade200;
-                    } else if (entry.contains('AUDIO_STOPPED') ||
-                        entry.contains('GRACE_STARTED')) {
-                      entryColor = Colors.amberAccent.shade200;
-                    } else if (entry.contains('GRACE_EXPIRED') ||
-                        entry.contains('LISTENING_ENDED')) {
-                      entryColor = Colors.orange.shade300;
-                    } else if (entry.contains('OUTPUT_CHANGED') ||
-                        entry.contains('AUDIO_OUTPUT_CHANGED')) {
-                      entryColor = Colors.purple.shade300;
-                    } else if (entry.contains('PERSISTED_SESSION')) {
-                      entryColor = Colors.tealAccent.shade200;
-                    }
-
-                    return Padding(
-                      padding: const EdgeInsets.symmetric(vertical: 2),
-                      child: Text(
-                        entry,
-                        softWrap: true,
-                        style: TextStyle(
-                          fontSize: 11,
-                          color: entryColor,
-                          fontFamily: 'monospace',
-                        ),
-                      ),
-                    );
-                  },
-                ),
-              ),
-          ],
-        ),
       ),
     );
   }

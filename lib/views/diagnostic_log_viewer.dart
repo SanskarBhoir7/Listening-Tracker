@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import '../app_theme.dart';
 import '../audio_monitor_service.dart';
 import '../database/database_adapter.dart';
 import '../models/diagnostic_event.dart';
@@ -162,22 +163,22 @@ class _DiagnosticLogViewerState extends State<DiagnosticLogViewer> {
   Color _getEventColor(String eventType) {
     if (eventType.contains('AUDIO_STARTED') ||
         eventType.contains('LISTENING_STARTED')) {
-      return Colors.greenAccent;
+      return ListeningPalette.mint;
     } else if (eventType.contains('AUDIO_STOPPED') ||
         eventType.contains('STOP_CONFIRMATION_CONFIRMED')) {
-      return Colors.amberAccent;
+      return ListeningPalette.amber;
     } else if (eventType.contains('STOP_CONFIRMATION_SCHEDULED')) {
       return Colors.orangeAccent;
     } else if (eventType.contains('STOP_CONFIRMATION_CANCELLED')) {
       return Colors.lightGreenAccent;
     } else if (eventType.contains('CONNECTED')) {
-      return Colors.cyanAccent;
+      return ListeningPalette.cyan;
     } else if (eventType.contains('DISCONNECTED')) {
       return Colors.redAccent;
     } else if (eventType.contains('ERROR') || eventType.contains('FAIL')) {
       return Colors.pinkAccent;
     } else if (eventType.contains('GRACE')) {
-      return Colors.tealAccent;
+      return ListeningPalette.mint;
     }
     return Colors.grey.shade300;
   }
@@ -231,7 +232,7 @@ class _DiagnosticLogViewerState extends State<DiagnosticLogViewer> {
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,
-      backgroundColor: const Color(0xFF1E222A),
+      backgroundColor: ListeningPalette.surface,
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
       ),
@@ -318,7 +319,7 @@ class _DiagnosticLogViewerState extends State<DiagnosticLogViewer> {
                       style: TextStyle(
                         fontSize: 14,
                         fontWeight: FontWeight.bold,
-                        color: Colors.tealAccent,
+                        color: ListeningPalette.mint,
                       ),
                     ),
                     const SizedBox(height: 6),
@@ -469,13 +470,13 @@ class _DiagnosticLogViewerState extends State<DiagnosticLogViewer> {
     final filtered = _filteredEvents;
 
     return Scaffold(
-      backgroundColor: const Color(0xFF121418),
+      backgroundColor: ListeningPalette.background,
       appBar: AppBar(
         title: const Text('Diagnostic Logs'),
-        backgroundColor: const Color(0xFF1E222A),
+        backgroundColor: ListeningPalette.surface,
         actions: [
           IconButton(
-            icon: const Icon(Icons.share, color: Colors.tealAccent),
+            icon: const Icon(Icons.share, color: ListeningPalette.mint),
             tooltip: 'Export Logs (JSON)',
             onPressed: _exportLogs,
           ),
@@ -490,7 +491,7 @@ class _DiagnosticLogViewerState extends State<DiagnosticLogViewer> {
         children: [
           // Search Bar & Filter Chips
           Container(
-            color: const Color(0xFF1E222A),
+            color: ListeningPalette.surface,
             padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
             child: Column(
               children: [
@@ -522,7 +523,7 @@ class _DiagnosticLogViewerState extends State<DiagnosticLogViewer> {
                           )
                         : null,
                     filled: true,
-                    fillColor: const Color(0xFF121418),
+                    fillColor: ListeningPalette.surfaceRaised,
                     contentPadding: const EdgeInsets.symmetric(vertical: 8),
                     border: OutlineInputBorder(
                       borderRadius: BorderRadius.circular(8),
@@ -556,8 +557,8 @@ class _DiagnosticLogViewerState extends State<DiagnosticLogViewer> {
                                 ? Colors.black
                                 : Colors.grey.shade400,
                           ),
-                          selectedColor: Colors.tealAccent,
-                          backgroundColor: const Color(0xFF282C34),
+                          selectedColor: ListeningPalette.mint,
+                          backgroundColor: ListeningPalette.surfaceRaised,
                         ),
                       );
                     }).toList(),
@@ -637,7 +638,7 @@ class _DiagnosticLogViewerState extends State<DiagnosticLogViewer> {
                             decoration: const BoxDecoration(
                               border: Border(
                                 bottom: BorderSide(
-                                  color: Color(0xFF1E222A),
+                                  color: ListeningPalette.surface,
                                   width: 1,
                                 ),
                               ),
@@ -718,7 +719,7 @@ class _DiagnosticLogViewerState extends State<DiagnosticLogViewer> {
                                     style: TextStyle(
                                       fontSize: 11,
                                       fontFamily: 'monospace',
-                                      color: Colors.tealAccent.shade100,
+                                      color: ListeningPalette.mint,
                                     ),
                                   ),
                                 if (event.reason != null &&

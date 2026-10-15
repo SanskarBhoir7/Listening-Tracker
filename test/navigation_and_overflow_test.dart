@@ -46,17 +46,42 @@ void main() {
       await tester.pumpAndSettle();
 
       // Verify default tab is Live Monitor
-      expect(find.text('LISTENING TRACKER — LIVE MONITOR'), findsOneWidget);
+      expect(find.byKey(const Key('screen_title')), findsOneWidget);
+      expect(
+        tester.widget<Text>(find.byKey(const Key('screen_title'))).data,
+        'SoundSpan',
+      );
       expect(find.text('Live Monitor'), findsWidgets);
-      expect(find.text('History'), findsOneWidget);
-      expect(find.text('Analytics'), findsOneWidget);
-
+      expect(find.byKey(const Key('soundspan_logo')), findsOneWidget);
+      expect(find.text('Live'), findsOneWidget);
       // Verify core Live Monitor cards are present
       expect(find.text('START MONITORING'), findsOneWidget);
-      expect(find.text('Live Session Tracking (Separated)'), findsOneWidget);
+      expect(find.text('Playback details'), findsOneWidget);
       expect(find.text('Bluetooth State'), findsOneWidget);
-      expect(find.text('Event Log'), findsOneWidget);
+      expect(find.text('Event Log'), findsNothing);
+      expect(
+        find.byKey(const Key('appbar_developer_tools_button')),
+        findsOneWidget,
+      );
       expect(find.byKey(const Key('break_threshold_progress')), findsOneWidget);
+    });
+
+    testWidgets('Developer tools remain accessible in debug builds', (
+      tester,
+    ) async {
+      await tester.pumpWidget(buildTestApp());
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.byKey(const Key('appbar_developer_tools_button')));
+      await tester.pumpAndSettle();
+
+      expect(find.text('Developer Tools'), findsOneWidget);
+      expect(find.text('Break simulation'), findsOneWidget);
+      expect(find.text('Diagnostics'), findsOneWidget);
+      expect(find.byKey(const Key('btn_simulate_45m')), findsOneWidget);
+      await tester.tap(find.byKey(const Key('open_diagnostic_log_button')));
+      await tester.pumpAndSettle();
+      expect(find.text('Diagnostic Logs'), findsOneWidget);
     });
 
     testWidgets('Tapping History changes section to History view', (
@@ -70,7 +95,10 @@ void main() {
       await tester.pumpAndSettle();
 
       // Title updates
-      expect(find.text('LISTENING HISTORY'), findsOneWidget);
+      expect(
+        tester.widget<Text>(find.byKey(const Key('screen_title'))).data,
+        'History',
+      );
       // History view elements are visible
       expect(find.text('Daily Summary'), findsOneWidget);
       expect(find.textContaining('Recorded Sessions'), findsOneWidget);
@@ -179,7 +207,10 @@ void main() {
       await tester.pumpAndSettle();
 
       // Title updates
-      expect(find.text('LISTENING ANALYTICS'), findsOneWidget);
+      expect(
+        tester.widget<Text>(find.byKey(const Key('screen_title'))).data,
+        'Analytics',
+      );
       // Analytics view elements are visible
       expect(find.text('Period Summary'), findsOneWidget);
       expect(find.textContaining('Device Breakdown'), findsOneWidget);
@@ -194,20 +225,73 @@ void main() {
       // Navigate away to History
       await tester.tap(find.text('History'));
       await tester.pumpAndSettle();
-      expect(find.text('LISTENING HISTORY'), findsOneWidget);
+      expect(
+        tester.widget<Text>(find.byKey(const Key('screen_title'))).data,
+        'History',
+      );
 
       // Return to Live Monitor
       await tester.tap(find.text('Live Monitor'));
       await tester.pumpAndSettle();
 
       // Live Monitor content restored
-      expect(find.text('LISTENING TRACKER — LIVE MONITOR'), findsOneWidget);
-      expect(find.text('Live Session Tracking (Separated)'), findsOneWidget);
+      expect(
+        tester.widget<Text>(find.byKey(const Key('screen_title'))).data,
+        'SoundSpan',
+      );
+      expect(find.text('Playback details'), findsOneWidget);
       expect(find.text('Bluetooth State'), findsOneWidget);
     });
   });
 
   group('UI Responsiveness & Overflow Prevention Tests', () {
+    testWidgets(
+      'Live Monitor, Developer Tools and Diagnostics fit the supported width and text matrix',
+      (tester) async {
+        for (final width in [320.0, 360.0, 390.0, 430.0]) {
+          for (final textScale in [1.0]) {
+            tester.view.physicalSize = Size(width, 800);
+            tester.view.devicePixelRatio = 1.0;
+            await tester.pumpWidget(const SizedBox.shrink());
+            await tester.pump();
+            await tester.pumpWidget(buildTestApp(textScaleFactor: textScale));
+            await tester.pumpAndSettle();
+            expect(
+              tester.takeException(),
+              isNull,
+              reason: 'Live Monitor $width px, $textScale×',
+            );
+
+            final developerToolsButton = find.byKey(
+              const Key('appbar_developer_tools_button'),
+            );
+            expect(
+              developerToolsButton,
+              findsOneWidget,
+              reason: 'Live Monitor toolbar at $width px, $textScale×',
+            );
+            await tester.tap(developerToolsButton);
+            await tester.pumpAndSettle();
+            expect(
+              tester.takeException(),
+              isNull,
+              reason: 'Developer Tools $width px, $textScale×',
+            );
+
+            await tester.tap(
+              find.byKey(const Key('open_diagnostic_log_button')),
+            );
+            await tester.pumpAndSettle();
+            expect(
+              tester.takeException(),
+              isNull,
+              reason: 'Diagnostics $width px, $textScale×',
+            );
+            expect(find.text('Diagnostic Logs'), findsOneWidget);
+          }
+        }
+      },
+    );
     testWidgets(
       'Narrow screen 320 logical pixels renders with zero RenderFlex overflow',
       (tester) async {
@@ -218,16 +302,18 @@ void main() {
         await tester.pumpWidget(buildTestApp());
         await tester.pumpAndSettle();
 
+        await tester.tap(
+          find.byKey(const Key('appbar_developer_tools_button')),
+        );
+        await tester.pumpAndSettle();
+        await tester.tap(find.byKey(const Key('open_diagnostic_log_button')));
+        await tester.pumpAndSettle();
+
         // Ensure zero overflow errors occurred
         expect(tester.takeException(), isNull);
 
-        // Verify Event Log buttons are visible and functional
-        expect(find.text('Copy'), findsOneWidget);
-        expect(find.text('Clear'), findsOneWidget);
-
-        await tester.ensureVisible(find.text('Clear'));
-        await tester.tap(find.text('Clear'));
-        await tester.pumpAndSettle();
+        expect(find.text('Diagnostic Logs'), findsOneWidget);
+        expect(find.byType(TextField), findsOneWidget);
         expect(tester.takeException(), isNull);
       },
     );
@@ -242,9 +328,15 @@ void main() {
         await tester.pumpWidget(buildTestApp());
         await tester.pumpAndSettle();
 
+        await tester.tap(
+          find.byKey(const Key('appbar_developer_tools_button')),
+        );
+        await tester.pumpAndSettle();
+        await tester.tap(find.byKey(const Key('open_diagnostic_log_button')));
+        await tester.pumpAndSettle();
+
         expect(tester.takeException(), isNull);
-        expect(find.text('Live Session Tracking (Separated)'), findsOneWidget);
-        expect(find.text('Event Log'), findsOneWidget);
+        expect(find.text('Diagnostic Logs'), findsOneWidget);
       },
     );
 
@@ -258,10 +350,16 @@ void main() {
         await tester.pumpWidget(buildTestApp(textScaleFactor: 1.8));
         await tester.pumpAndSettle();
 
+        await tester.tap(
+          find.byKey(const Key('appbar_developer_tools_button')),
+        );
+        await tester.pumpAndSettle();
+        await tester.tap(find.byKey(const Key('open_diagnostic_log_button')));
+        await tester.pumpAndSettle();
+
         expect(tester.takeException(), isNull);
-        expect(find.text('Event Log'), findsOneWidget);
-        expect(find.text('Copy'), findsOneWidget);
-        expect(find.text('Clear'), findsOneWidget);
+        expect(find.text('Diagnostic Logs'), findsOneWidget);
+        expect(find.byType(TextField), findsOneWidget);
       },
     );
   });

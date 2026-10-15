@@ -190,6 +190,7 @@ void main() {
         await tester.pumpWidget(buildApp(service: fakeService));
         await tester.pumpAndSettle();
 
+        await tester.ensureVisible(find.text('START MONITORING'));
         await tester.tap(find.text('START MONITORING'));
         await tester.pumpAndSettle();
 
@@ -472,6 +473,8 @@ void main() {
       await tester.pumpAndSettle();
 
       // User manually starts monitoring
+      await tester.ensureVisible(find.text('START MONITORING'));
+      await tester.pumpAndSettle();
       await tester.tap(find.text('START MONITORING'));
       await tester.pumpAndSettle();
 
@@ -480,6 +483,8 @@ void main() {
       expect(find.text('STOP MONITORING'), findsOneWidget);
 
       // User manually stops monitoring
+      await tester.ensureVisible(find.text('STOP MONITORING'));
+      await tester.pumpAndSettle();
       await tester.tap(find.text('STOP MONITORING'));
       await tester.pumpAndSettle();
 
@@ -756,10 +761,7 @@ void main() {
             'id': 'diag_recovered_2',
             'timestamp': DateTime.now().millisecondsSinceEpoch - 2000,
             'event_type': 'RECOVERY_TRIGGERED_FROM_NOTIFICATION',
-            'metadata': {
-              'deviceName': 'realme Buds T200 Lite',
-              'startId': 2,
-            },
+            'metadata': {'deviceName': 'realme Buds T200 Lite', 'startId': 2},
           },
         ];
 
@@ -780,7 +782,10 @@ void main() {
         await tester.pumpAndSettle();
 
         expect(engine.isMonitoring, isTrue);
-        expect(engine.connectionState, equals(BluetoothConnectionState.connected));
+        expect(
+          engine.connectionState,
+          equals(BluetoothConnectionState.connected),
+        );
         expect(engine.sessionState, equals(ListeningSessionState.idle));
 
         await engine.stopMonitoring();
@@ -820,7 +825,10 @@ void main() {
 
         // Must have exactly one device tracked and in idle (not listening) state
         expect(engine.connectedDevicesList.length, equals(1));
-        expect(engine.connectionState, equals(BluetoothConnectionState.connected));
+        expect(
+          engine.connectionState,
+          equals(BluetoothConnectionState.connected),
+        );
         expect(engine.sessionState, equals(ListeningSessionState.idle));
         expect(find.text('CONNECTED (Idle / Silent)'), findsOneWidget);
 
@@ -861,7 +869,7 @@ void main() {
                 'typeName': 'Bluetooth A2DP',
                 'connectionType': 'bluetooth',
                 'address': '28:04:C6:D2:59:08',
-              }
+              },
             ],
           },
         );
@@ -871,7 +879,10 @@ void main() {
 
         // 1. Initial snapshot recovery sees audio playing and activates session
         expect(engine.isMonitoring, isTrue);
-        expect(engine.connectionState, equals(BluetoothConnectionState.connected));
+        expect(
+          engine.connectionState,
+          equals(BluetoothConnectionState.connected),
+        );
         expect(engine.sessionState, equals(ListeningSessionState.active));
         expect(engine.currentDeviceSession, isNotNull);
 
@@ -926,7 +937,7 @@ void main() {
                 'typeName': 'Bluetooth A2DP',
                 'connectionType': 'bluetooth',
                 'address': '28:04:C6:D2:59:08',
-              }
+              },
             ],
           },
         );
@@ -936,7 +947,10 @@ void main() {
 
         // Connected, but session MUST remain idle
         expect(engine.isMonitoring, isTrue);
-        expect(engine.connectionState, equals(BluetoothConnectionState.connected));
+        expect(
+          engine.connectionState,
+          equals(BluetoothConnectionState.connected),
+        );
         expect(engine.sessionState, equals(ListeningSessionState.idle));
         expect(engine.currentDeviceSession, isNull);
         expect(find.text('CONNECTED (Idle / Silent)'), findsOneWidget);
@@ -949,7 +963,9 @@ void main() {
         expect(engine.currentDeviceSession, isNull);
 
         final eventsInDb = await db.getDiagnosticEvents();
-        final checkpoints = eventsInDb.where((e) => e.eventType == 'SESSION_CHECKPOINT');
+        final checkpoints = eventsInDb.where(
+          (e) => e.eventType == 'SESSION_CHECKPOINT',
+        );
         expect(checkpoints, isEmpty);
 
         await engine.stopMonitoring();

@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import '../app_theme.dart';
 import '../models/break_reminder_settings.dart';
 import '../session_engine.dart';
 
@@ -122,7 +123,7 @@ class _BreakSettingsViewState extends State<BreakSettingsView> {
                 ? 'Break reminder set to $_intervalMinutes minutes'
                 : 'Break reminders disabled',
           ),
-          backgroundColor: Colors.teal.shade700,
+          backgroundColor: ListeningPalette.mint,
           duration: const Duration(seconds: 2),
         ),
       );
@@ -134,30 +135,30 @@ class _BreakSettingsViewState extends State<BreakSettingsView> {
   Widget build(BuildContext context) {
     if (_isLoading) {
       return Scaffold(
-        backgroundColor: Colors.black,
+        backgroundColor: ListeningPalette.background,
         appBar: AppBar(
           title: const Text('Break Reminder Settings'),
-          backgroundColor: Colors.grey.shade900,
+          backgroundColor: ListeningPalette.background,
         ),
         body: const Center(
-          child: CircularProgressIndicator(color: Colors.tealAccent),
+          child: CircularProgressIndicator(color: ListeningPalette.mint),
         ),
       );
     }
 
     return Scaffold(
-      backgroundColor: Colors.black,
+      backgroundColor: ListeningPalette.background,
       appBar: AppBar(
         title: const Text(
           'Break Reminder Settings',
           style: TextStyle(fontWeight: FontWeight.bold, fontSize: 18),
         ),
-        backgroundColor: Colors.grey.shade900,
+        backgroundColor: ListeningPalette.background,
         elevation: 0,
         actions: [
           IconButton(
             key: const Key('save_break_settings_button'),
-            icon: const Icon(Icons.check, color: Colors.tealAccent),
+            icon: const Icon(Icons.check, color: ListeningPalette.mint),
             tooltip: 'Save Settings',
             onPressed: _saveSettings,
           ),
@@ -170,13 +171,13 @@ class _BreakSettingsViewState extends State<BreakSettingsView> {
           children: [
             // Master Toggle
             Card(
-              color: Colors.grey.shade900,
+              color: ListeningPalette.surface,
               shape: RoundedRectangleBorder(
                 borderRadius: BorderRadius.circular(12),
                 side: BorderSide(
                   color: _enabled
-                      ? Colors.tealAccent.withValues(alpha: 0.5)
-                      : Colors.white12,
+                      ? ListeningPalette.mint.withValues(alpha: 0.35)
+                      : ListeningPalette.separator,
                 ),
               ),
               child: SwitchListTile(
@@ -187,7 +188,7 @@ class _BreakSettingsViewState extends State<BreakSettingsView> {
                     _enabled = val;
                   });
                 },
-                activeThumbColor: Colors.tealAccent,
+                activeThumbColor: ListeningPalette.mint,
                 title: const Text(
                   'Enable Break Reminders',
                   style: TextStyle(
@@ -215,12 +216,11 @@ class _BreakSettingsViewState extends State<BreakSettingsView> {
                   children: [
                     // Interval Section Header
                     const Text(
-                      'REMINDER INTERVAL',
+                      'Reminder interval',
                       style: TextStyle(
-                        fontSize: 12,
-                        fontWeight: FontWeight.bold,
-                        color: Colors.tealAccent,
-                        letterSpacing: 1.1,
+                        fontSize: 15,
+                        fontWeight: FontWeight.w700,
+                        color: ListeningPalette.text,
                       ),
                     ),
                     const SizedBox(height: 4),
@@ -257,11 +257,11 @@ class _BreakSettingsViewState extends State<BreakSettingsView> {
                             visualDensity: VisualDensity.compact,
                             materialTapTargetSize:
                                 MaterialTapTargetSize.shrinkWrap,
-                            selectedColor: Colors.tealAccent,
-                            backgroundColor: Colors.grey.shade900,
+                            selectedColor: ListeningPalette.mint,
+                            backgroundColor: ListeningPalette.surface,
                             side: BorderSide(
                               color: isSelected
-                                  ? Colors.tealAccent
+                                  ? ListeningPalette.mint
                                   : Colors.white24,
                             ),
                             onSelected: (selected) {
@@ -289,11 +289,11 @@ class _BreakSettingsViewState extends State<BreakSettingsView> {
                           visualDensity: VisualDensity.compact,
                           materialTapTargetSize:
                               MaterialTapTargetSize.shrinkWrap,
-                          selectedColor: Colors.tealAccent,
-                          backgroundColor: Colors.grey.shade900,
+                          selectedColor: ListeningPalette.mint,
+                          backgroundColor: ListeningPalette.surface,
                           side: BorderSide(
                             color: _isCustomInterval
-                                ? Colors.tealAccent
+                                ? ListeningPalette.mint
                                 : Colors.white24,
                           ),
                           onSelected: (selected) {
@@ -315,16 +315,18 @@ class _BreakSettingsViewState extends State<BreakSettingsView> {
                         style: const TextStyle(color: Colors.white),
                         decoration: InputDecoration(
                           labelText: 'Custom Interval (Minutes)',
-                          labelStyle: const TextStyle(color: Colors.tealAccent),
+                          labelStyle: const TextStyle(
+                            color: ListeningPalette.mint,
+                          ),
                           helperText: 'Valid range: 15 to 120 minutes',
                           helperStyle: TextStyle(color: Colors.grey.shade400),
                           errorText: _customError,
                           suffixText: 'min',
                           suffixStyle: const TextStyle(
-                            color: Colors.tealAccent,
+                            color: ListeningPalette.mint,
                           ),
                           filled: true,
-                          fillColor: Colors.grey.shade900,
+                          fillColor: ListeningPalette.surface,
                           border: OutlineInputBorder(
                             borderRadius: BorderRadius.circular(8),
                             borderSide: const BorderSide(color: Colors.white24),
@@ -332,7 +334,7 @@ class _BreakSettingsViewState extends State<BreakSettingsView> {
                           focusedBorder: OutlineInputBorder(
                             borderRadius: BorderRadius.circular(8),
                             borderSide: const BorderSide(
-                              color: Colors.tealAccent,
+                              color: ListeningPalette.mint,
                             ),
                           ),
                         ),
@@ -347,10 +349,12 @@ class _BreakSettingsViewState extends State<BreakSettingsView> {
                         width: double.infinity,
                         padding: const EdgeInsets.all(12),
                         decoration: BoxDecoration(
-                          color: Colors.teal.shade900.withValues(alpha: 0.28),
+                          color: ListeningPalette.surfaceRaised,
                           borderRadius: BorderRadius.circular(10),
                           border: Border.all(
-                            color: Colors.tealAccent.withValues(alpha: 0.35),
+                            color: ListeningPalette.mint.withValues(
+                              alpha: 0.35,
+                            ),
                           ),
                         ),
                         child: Row(
@@ -358,7 +362,7 @@ class _BreakSettingsViewState extends State<BreakSettingsView> {
                           children: [
                             const Icon(
                               Icons.info_outline,
-                              color: Colors.tealAccent,
+                              color: ListeningPalette.mint,
                               size: 18,
                             ),
                             const SizedBox(width: 8),
@@ -381,12 +385,12 @@ class _BreakSettingsViewState extends State<BreakSettingsView> {
 
                     // Snooze Duration Section
                     const Text(
-                      'SNOOZE DURATION',
+                      'Snooze duration',
                       style: TextStyle(
                         fontSize: 12,
                         fontWeight: FontWeight.bold,
-                        color: Colors.tealAccent,
-                        letterSpacing: 1.1,
+                        color: ListeningPalette.text,
+                        letterSpacing: 0.2,
                       ),
                     ),
                     const SizedBox(height: 4),
@@ -420,11 +424,11 @@ class _BreakSettingsViewState extends State<BreakSettingsView> {
                           visualDensity: VisualDensity.compact,
                           materialTapTargetSize:
                               MaterialTapTargetSize.shrinkWrap,
-                          selectedColor: Colors.amberAccent.shade400,
-                          backgroundColor: Colors.grey.shade900,
+                          selectedColor: ListeningPalette.amber,
+                          backgroundColor: ListeningPalette.surface,
                           side: BorderSide(
                             color: isSelected
-                                ? Colors.amberAccent
+                                ? ListeningPalette.amber
                                 : Colors.white24,
                           ),
                           onSelected: (selected) {
@@ -442,7 +446,7 @@ class _BreakSettingsViewState extends State<BreakSettingsView> {
 
                     // Rule Preview Card
                     Card(
-                      color: Colors.grey.shade900,
+                      color: ListeningPalette.surface,
                       shape: RoundedRectangleBorder(
                         borderRadius: BorderRadius.circular(12),
                         side: const BorderSide(color: Colors.white12),
@@ -456,18 +460,17 @@ class _BreakSettingsViewState extends State<BreakSettingsView> {
                               children: [
                                 Icon(
                                   Icons.preview_outlined,
-                                  color: Colors.tealAccent.shade400,
+                                  color: ListeningPalette.mint,
                                   size: 18,
                                 ),
                                 const SizedBox(width: 8),
                                 const Expanded(
                                   child: Text(
-                                    'RULE BEHAVIOR PREVIEW',
+                                    'How reminders work',
                                     style: TextStyle(
-                                      fontWeight: FontWeight.bold,
-                                      fontSize: 12,
-                                      letterSpacing: 1.0,
-                                      color: Colors.white,
+                                      fontWeight: FontWeight.w700,
+                                      fontSize: 15,
+                                      color: ListeningPalette.text,
                                     ),
                                   ),
                                 ),
@@ -476,7 +479,7 @@ class _BreakSettingsViewState extends State<BreakSettingsView> {
                             const Divider(color: Colors.white12, height: 20),
                             _buildPreviewRow(
                               icon: Icons.notifications_active_outlined,
-                              color: Colors.amberAccent.shade400,
+                              color: ListeningPalette.amber,
                               title: 'First Alert (Break Soon)',
                               description:
                                   'Triggers at $_intervalMinutes minutes of active listening.',
@@ -497,16 +500,33 @@ class _BreakSettingsViewState extends State<BreakSettingsView> {
                               description:
                                   'Suppresses alerts for $_snoozeMinutes minutes of continuous listening.',
                             ),
-                            const Divider(color: Colors.white12, height: 20),
-                            Text(
-                              'Guarantees & Invariants:\n'
-                              '• Bluetooth connection without audio never increments break time.\n'
-                              '• Pauses within the 3-minute grace period preserve session continuity without adding listening time.\n'
-                              '• Disconnecting audio peripherals immediately cancels all reminders and resets continuous time to zero.',
-                              style: TextStyle(
-                                fontSize: 12,
-                                color: Colors.grey.shade300,
-                                height: 1.55,
+                            const SizedBox(height: 8),
+                            Theme(
+                              data: Theme.of(context)
+                                  .copyWith(dividerColor: Colors.transparent),
+                              child: ExpansionTile(
+                                key: const Key('break_session_guarantees'),
+                                tilePadding: EdgeInsets.zero,
+                                childrenPadding: const EdgeInsets.only(
+                                  bottom: 12,
+                                ),
+                                title: const Text(
+                                  'Session guarantees',
+                                  style: TextStyle(
+                                    fontSize: 13,
+                                    fontWeight: FontWeight.w600,
+                                  ),
+                                ),
+                                children: [
+                                  Text(
+                                    'Bluetooth connection without audio never increments break time. Pauses within the 3-minute grace period preserve session continuity without adding listening time. Disconnecting audio peripherals immediately cancels all reminders and resets continuous time to zero.',
+                                    style: TextStyle(
+                                      fontSize: 12,
+                                      color: ListeningPalette.muted,
+                                      height: 1.55,
+                                    ),
+                                  ),
+                                ],
                               ),
                             ),
                           ],
@@ -527,7 +547,7 @@ class _BreakSettingsViewState extends State<BreakSettingsView> {
               child: ElevatedButton.icon(
                 key: const Key('save_break_settings_primary_button'),
                 style: ElevatedButton.styleFrom(
-                  backgroundColor: Colors.tealAccent,
+                  backgroundColor: ListeningPalette.mint,
                   foregroundColor: Colors.black,
                   shape: RoundedRectangleBorder(
                     borderRadius: BorderRadius.circular(10),

@@ -80,12 +80,15 @@ void main() {
       db = InMemoryDatabaseAdapter();
     });
 
-    test('Returns default 45m settings when no preferences have been saved yet', () async {
-      final settings = await db.getBreakReminderSettings();
-      expect(settings.enabled, isTrue);
-      expect(settings.intervalMinutes, 45);
-      expect(settings.snoozeMinutes, 10);
-    });
+    test(
+      'Returns default 45m settings when no preferences have been saved yet',
+      () async {
+        final settings = await db.getBreakReminderSettings();
+        expect(settings.enabled, isTrue);
+        expect(settings.intervalMinutes, 45);
+        expect(settings.snoozeMinutes, 10);
+      },
+    );
 
     test('Persists and retrieves custom break settings', () async {
       const custom = BreakReminderSettings(
@@ -119,133 +122,153 @@ void main() {
       );
     });
 
-    test('Disabled reminders suppress notifications and keep normal status', () async {
-      await breakEngine.updateConfig(
-        const BreakRuleConfig(enabled: false),
-      );
+    test(
+      'Disabled reminders suppress notifications and keep normal status',
+      () async {
+        await breakEngine.updateConfig(const BreakRuleConfig(enabled: false));
 
-      await breakEngine.update(
-        continuousListeningDuration: const Duration(minutes: 50),
-        isAudioPlaying: true,
-        isInGracePeriod: false,
-        activeDevice: testDevice,
-      );
+        await breakEngine.update(
+          continuousListeningDuration: const Duration(minutes: 50),
+          isAudioPlaying: true,
+          isInGracePeriod: false,
+          activeDevice: testDevice,
+        );
 
-      expect(breakEngine.state.status, BreakStatus.normal);
-      expect(breakEngine.state.isEnabled, isFalse);
-      expect(notificationService.shownNotifications, isEmpty);
-    });
+        expect(breakEngine.state.status, BreakStatus.normal);
+        expect(breakEngine.state.isEnabled, isFalse);
+        expect(notificationService.shownNotifications, isEmpty);
+      },
+    );
 
-    test('Dynamic updateConfig immediately reapplies thresholds without restart', () async {
-      // 35 minutes is normal under 45m threshold
-      await breakEngine.update(
-        continuousListeningDuration: const Duration(minutes: 35),
-        isAudioPlaying: true,
-        isInGracePeriod: false,
-        activeDevice: testDevice,
-      );
-      expect(breakEngine.state.status, BreakStatus.normal);
-      expect(notificationService.shownNotifications, isEmpty);
+    test(
+      'Dynamic updateConfig immediately reapplies thresholds without restart',
+      () async {
+        // 35 minutes is normal under 45m threshold
+        await breakEngine.update(
+          continuousListeningDuration: const Duration(minutes: 35),
+          isAudioPlaying: true,
+          isInGracePeriod: false,
+          activeDevice: testDevice,
+        );
+        expect(breakEngine.state.status, BreakStatus.normal);
+        expect(notificationService.shownNotifications, isEmpty);
 
-      // Reconfigure threshold to 30m
-      await breakEngine.updateConfig(
-        const BreakRuleConfig(
-          enabled: true,
-          breakSoonThreshold: Duration(minutes: 30),
-          breakRecommendedThreshold: Duration(minutes: 45),
-        ),
-      );
+        // Reconfigure threshold to 30m
+        await breakEngine.updateConfig(
+          const BreakRuleConfig(
+            enabled: true,
+            breakSoonThreshold: Duration(minutes: 30),
+            breakRecommendedThreshold: Duration(minutes: 45),
+          ),
+        );
 
-      expect(breakEngine.state.status, BreakStatus.breakSoon);
-      expect(notificationService.shownNotifications.length, 1);
-    });
+        expect(breakEngine.state.status, BreakStatus.breakSoon);
+        expect(notificationService.shownNotifications.length, 1);
+      },
+    );
 
-    test('Changing an interval replaces old notification deduplication thresholds', () async {
-      await breakEngine.update(
-        continuousListeningDuration: const Duration(minutes: 45),
-        isAudioPlaying: true,
-        isInGracePeriod: false,
-        activeDevice: testDevice,
-      );
-      expect(notificationService.shownNotifications.length, 1);
+    test(
+      'Changing an interval replaces old notification deduplication thresholds',
+      () async {
+        await breakEngine.update(
+          continuousListeningDuration: const Duration(minutes: 45),
+          isAudioPlaying: true,
+          isInGracePeriod: false,
+          activeDevice: testDevice,
+        );
+        expect(notificationService.shownNotifications.length, 1);
 
-      await breakEngine.updateConfig(
-        const BreakRuleConfig(
-          enabled: true,
-          breakSoonThreshold: Duration(minutes: 60),
-          breakRecommendedThreshold: Duration(minutes: 75),
-        ),
-      );
-      await breakEngine.update(
-        continuousListeningDuration: const Duration(minutes: 60),
-        isAudioPlaying: true,
-        isInGracePeriod: false,
-        activeDevice: testDevice,
-      );
+        await breakEngine.updateConfig(
+          const BreakRuleConfig(
+            enabled: true,
+            breakSoonThreshold: Duration(minutes: 60),
+            breakRecommendedThreshold: Duration(minutes: 75),
+          ),
+        );
+        await breakEngine.update(
+          continuousListeningDuration: const Duration(minutes: 60),
+          isAudioPlaying: true,
+          isInGracePeriod: false,
+          activeDevice: testDevice,
+        );
 
-      expect(breakEngine.state.status, BreakStatus.breakSoon);
-      expect(notificationService.shownNotifications.length, 1);
-      expect(notificationService.shownNotifications.last['id'], 3001);
-    });
+        expect(breakEngine.state.status, BreakStatus.breakSoon);
+        expect(notificationService.shownNotifications.length, 1);
+        expect(notificationService.shownNotifications.last['id'], 3001);
+      },
+    );
 
-    test('Re-enabling reminders can notify at the active threshold again', () async {
-      await breakEngine.update(
-        continuousListeningDuration: const Duration(minutes: 45),
-        isAudioPlaying: true,
-        isInGracePeriod: false,
-        activeDevice: testDevice,
-      );
-      await breakEngine.updateConfig(
-        const BreakRuleConfig(enabled: false),
-      );
-      await breakEngine.updateConfig(
-        const BreakRuleConfig(
-          enabled: true,
-          breakSoonThreshold: Duration(minutes: 45),
-          breakRecommendedThreshold: Duration(minutes: 60),
-        ),
-      );
+    test(
+      'Re-enabling reminders can notify at the active threshold again',
+      () async {
+        await breakEngine.update(
+          continuousListeningDuration: const Duration(minutes: 45),
+          isAudioPlaying: true,
+          isInGracePeriod: false,
+          activeDevice: testDevice,
+        );
+        await breakEngine.updateConfig(const BreakRuleConfig(enabled: false));
+        await breakEngine.updateConfig(
+          const BreakRuleConfig(
+            enabled: true,
+            breakSoonThreshold: Duration(minutes: 45),
+            breakRecommendedThreshold: Duration(minutes: 60),
+          ),
+        );
 
-      expect(notificationService.shownNotifications.length, 1);
-      expect(notificationService.shownNotifications.single['id'], 3001);
-    });
+        expect(notificationService.shownNotifications.length, 1);
+        expect(notificationService.shownNotifications.single['id'], 3001);
+      },
+    );
 
-    test('Snooze suppresses notifications until snooze duration elapses', () async {
-      // Reach threshold at 45m
-      await breakEngine.update(
-        continuousListeningDuration: const Duration(minutes: 45),
-        isAudioPlaying: true,
-        isInGracePeriod: false,
-        activeDevice: testDevice,
-      );
-      expect(notificationService.shownNotifications.length, 1);
+    test(
+      'Snooze suppresses notifications until snooze duration elapses',
+      () async {
+        // Reach threshold at 45m
+        await breakEngine.update(
+          continuousListeningDuration: const Duration(minutes: 45),
+          isAudioPlaying: true,
+          isInGracePeriod: false,
+          activeDevice: testDevice,
+        );
+        expect(notificationService.shownNotifications.length, 1);
 
-      // Snooze for 10 minutes
-      await breakEngine.snooze(const Duration(minutes: 10));
-      expect(breakEngine.isSnoozed, isTrue);
-      expect(breakEngine.state.isSnoozed, isTrue);
-      expect(notificationService.shownNotifications, isEmpty); // Active notification cancelled
+        // Snooze for 10 minutes
+        await breakEngine.snooze(const Duration(minutes: 10));
+        expect(breakEngine.isSnoozed, isTrue);
+        expect(breakEngine.state.isSnoozed, isTrue);
+        expect(
+          notificationService.shownNotifications,
+          isEmpty,
+        ); // Active notification cancelled
 
-      // At 50 minutes (still snoozed)
-      await breakEngine.update(
-        continuousListeningDuration: const Duration(minutes: 50),
-        isAudioPlaying: true,
-        isInGracePeriod: false,
-        activeDevice: testDevice,
-      );
-      expect(breakEngine.isSnoozed, isTrue);
-      expect(notificationService.shownNotifications, isEmpty); // No notification during snooze
+        // At 50 minutes (still snoozed)
+        await breakEngine.update(
+          continuousListeningDuration: const Duration(minutes: 50),
+          isAudioPlaying: true,
+          isInGracePeriod: false,
+          activeDevice: testDevice,
+        );
+        expect(breakEngine.isSnoozed, isTrue);
+        expect(
+          notificationService.shownNotifications,
+          isEmpty,
+        ); // No notification during snooze
 
-      // At 55 minutes (snooze expired: 45 + 10 = 55m)
-      await breakEngine.update(
-        continuousListeningDuration: const Duration(minutes: 55),
-        isAudioPlaying: true,
-        isInGracePeriod: false,
-        activeDevice: testDevice,
-      );
-      expect(breakEngine.isSnoozed, isFalse);
-      expect(notificationService.shownNotifications.length, 1); // Dispatched again after snooze!
-    });
+        // At 55 minutes (snooze expired: 45 + 10 = 55m)
+        await breakEngine.update(
+          continuousListeningDuration: const Duration(minutes: 55),
+          isAudioPlaying: true,
+          isInGracePeriod: false,
+          activeDevice: testDevice,
+        );
+        expect(breakEngine.isSnoozed, isFalse);
+        expect(
+          notificationService.shownNotifications.length,
+          1,
+        ); // Dispatched again after snooze!
+      },
+    );
 
     test('Dismiss cancels notification and prevents re-triggering for current status', () async {
       // Reach threshold at 45m
@@ -319,10 +342,7 @@ void main() {
           snoozeDuration: Duration(seconds: 2),
         ),
       );
-      sessionEngine = SessionEngine(
-        database: db,
-        breakEngine: breakEngine,
-      );
+      sessionEngine = SessionEngine(database: db, breakEngine: breakEngine);
       await sessionEngine.initialize();
       await breakEngine.updateConfig(
         const BreakRuleConfig(
@@ -338,79 +358,93 @@ void main() {
       sessionEngine.dispose();
     });
 
-    test('Handles native BREAK_ACTION snooze event from NotificationManager', () async {
-      // Connect and start audio playback with explicit baseTime
-      await sessionEngine.handleNativeEvent({
-        'type': 'DEVICE_CONNECTED',
-        'deviceName': 'Sony WH-1000XM5',
-        'connectionType': 'bluetooth',
-        'address': '00:11:22:33:44:55',
-        'timestamp': baseTime.millisecondsSinceEpoch,
-      });
-      await sessionEngine.handleNativeEvent({
-        'type': 'AUDIO_STARTED',
-        'deviceName': 'Sony WH-1000XM5',
-        'connectionType': 'bluetooth',
-        'address': '00:11:22:33:44:55',
-        'timestamp': baseTime.millisecondsSinceEpoch,
-      });
+    test(
+      'Handles native BREAK_ACTION snooze event from NotificationManager',
+      () async {
+        // Connect and start audio playback with explicit baseTime
+        await sessionEngine.handleNativeEvent({
+          'type': 'DEVICE_CONNECTED',
+          'deviceName': 'Sony WH-1000XM5',
+          'connectionType': 'bluetooth',
+          'address': '00:11:22:33:44:55',
+          'timestamp': baseTime.millisecondsSinceEpoch,
+        });
+        await sessionEngine.handleNativeEvent({
+          'type': 'AUDIO_STARTED',
+          'deviceName': 'Sony WH-1000XM5',
+          'connectionType': 'bluetooth',
+          'address': '00:11:22:33:44:55',
+          'timestamp': baseTime.millisecondsSinceEpoch,
+        });
 
-      // Advance past 4-second threshold
-      sessionEngine.triggerTickForTesting(baseTime);
-      for (int i = 1; i <= 4; i++) {
-        sessionEngine.triggerTickForTesting(baseTime.add(Duration(seconds: i)));
-      }
+        // Advance past 4-second threshold
+        sessionEngine.triggerTickForTesting(baseTime);
+        for (int i = 1; i <= 4; i++) {
+          sessionEngine.triggerTickForTesting(
+            baseTime.add(Duration(seconds: i)),
+          );
+        }
 
-      expect(sessionEngine.breakState.status, BreakStatus.breakSoon);
-      expect(notificationService.shownNotifications.length, 1);
+        expect(sessionEngine.breakState.status, BreakStatus.breakSoon);
+        expect(notificationService.shownNotifications.length, 1);
 
-      // Simulate native notification action BroadcastReceiver dispatch
-      await sessionEngine.handleNativeEvent({
-        'type': 'BREAK_ACTION',
-        'action': 'snooze',
-        'id': 3001,
-        'snoozeMinutes': 5,
-        'timestamp': baseTime.add(const Duration(seconds: 4)).millisecondsSinceEpoch,
-      });
+        // Simulate native notification action BroadcastReceiver dispatch
+        await sessionEngine.handleNativeEvent({
+          'type': 'BREAK_ACTION',
+          'action': 'snooze',
+          'id': 3001,
+          'snoozeMinutes': 5,
+          'timestamp': baseTime
+              .add(const Duration(seconds: 4))
+              .millisecondsSinceEpoch,
+        });
 
-      expect(sessionEngine.breakState.isSnoozed, isTrue);
-      expect(notificationService.shownNotifications, isEmpty);
-    });
+        expect(sessionEngine.breakState.isSnoozed, isTrue);
+        expect(notificationService.shownNotifications, isEmpty);
+      },
+    );
 
-    test('Handles native BREAK_ACTION dismiss event from NotificationManager', () async {
-      await sessionEngine.handleNativeEvent({
-        'type': 'DEVICE_CONNECTED',
-        'deviceName': 'Sony WH-1000XM5',
-        'connectionType': 'bluetooth',
-        'address': '00:11:22:33:44:55',
-        'timestamp': baseTime.millisecondsSinceEpoch,
-      });
-      await sessionEngine.handleNativeEvent({
-        'type': 'AUDIO_STARTED',
-        'deviceName': 'Sony WH-1000XM5',
-        'connectionType': 'bluetooth',
-        'address': '00:11:22:33:44:55',
-        'timestamp': baseTime.millisecondsSinceEpoch,
-      });
+    test(
+      'Handles native BREAK_ACTION dismiss event from NotificationManager',
+      () async {
+        await sessionEngine.handleNativeEvent({
+          'type': 'DEVICE_CONNECTED',
+          'deviceName': 'Sony WH-1000XM5',
+          'connectionType': 'bluetooth',
+          'address': '00:11:22:33:44:55',
+          'timestamp': baseTime.millisecondsSinceEpoch,
+        });
+        await sessionEngine.handleNativeEvent({
+          'type': 'AUDIO_STARTED',
+          'deviceName': 'Sony WH-1000XM5',
+          'connectionType': 'bluetooth',
+          'address': '00:11:22:33:44:55',
+          'timestamp': baseTime.millisecondsSinceEpoch,
+        });
 
-      sessionEngine.triggerTickForTesting(baseTime);
-      for (int i = 1; i <= 4; i++) {
-        sessionEngine.triggerTickForTesting(baseTime.add(Duration(seconds: i)));
-      }
+        sessionEngine.triggerTickForTesting(baseTime);
+        for (int i = 1; i <= 4; i++) {
+          sessionEngine.triggerTickForTesting(
+            baseTime.add(Duration(seconds: i)),
+          );
+        }
 
-      expect(sessionEngine.breakState.status, BreakStatus.breakSoon);
+        expect(sessionEngine.breakState.status, BreakStatus.breakSoon);
 
-      // Simulate native dismiss action
-      await sessionEngine.handleNativeEvent({
-        'type': 'BREAK_ACTION',
-        'action': 'dismiss',
-        'id': 3001,
-        'timestamp': baseTime.add(const Duration(seconds: 4)).millisecondsSinceEpoch,
-      });
+        // Simulate native dismiss action
+        await sessionEngine.handleNativeEvent({
+          'type': 'BREAK_ACTION',
+          'action': 'dismiss',
+          'id': 3001,
+          'timestamp': baseTime
+              .add(const Duration(seconds: 4))
+              .millisecondsSinceEpoch,
+        });
 
-      expect(sessionEngine.breakState.isDismissed, isTrue);
-      expect(notificationService.shownNotifications, isEmpty);
-    });
+        expect(sessionEngine.breakState.isDismissed, isTrue);
+        expect(notificationService.shownNotifications, isEmpty);
+      },
+    );
 
     test('updateBreakReminderSettings persists and updates SessionEngine dynamically', () async {
       const newSettings = BreakReminderSettings(
@@ -423,7 +457,10 @@ void main() {
       final loaded = await sessionEngine.getBreakReminderSettings();
       expect(loaded.intervalMinutes, 60);
       expect(loaded.snoozeMinutes, 15);
-      expect(sessionEngine.breakEngine.config.breakSoonThreshold, const Duration(minutes: 60));
+      expect(
+        sessionEngine.breakEngine.config.breakSoonThreshold,
+        const Duration(minutes: 60),
+      );
     });
   });
 
@@ -437,10 +474,7 @@ void main() {
       db = InMemoryDatabaseAdapter();
       notificationService = FakeBreakNotificationService();
       breakEngine = BreakEngine(notificationService: notificationService);
-      sessionEngine = SessionEngine(
-        database: db,
-        breakEngine: breakEngine,
-      );
+      sessionEngine = SessionEngine(database: db, breakEngine: breakEngine);
       await sessionEngine.initialize();
     });
 
@@ -448,16 +482,49 @@ void main() {
       sessionEngine.dispose();
     });
 
-    testWidgets('Renders all quick chips and toggle with defaults', (tester) async {
+    testWidgets('Break Settings adapts to phone widths and large system text', (
+      tester,
+    ) async {
+      for (final width in [320.0, 360.0, 390.0, 430.0]) {
+        for (final textScale in [1.0, 1.8]) {
+          tester.view.physicalSize = Size(width, 800);
+          tester.view.devicePixelRatio = 1.0;
+          await tester.pumpWidget(
+            MaterialApp(
+              home: Builder(
+                builder: (context) => MediaQuery(
+                  data: MediaQuery.of(context)
+                      .copyWith(textScaler: TextScaler.linear(textScale)),
+                  child: BreakSettingsView(sessionEngine: sessionEngine),
+                ),
+              ),
+            ),
+          );
+          await tester.pumpAndSettle();
+          expect(
+            tester.takeException(),
+            isNull,
+            reason: '$width px, $textScale×',
+          );
+          expect(find.text('Break Reminder Settings'), findsOneWidget);
+          expect(find.byKey(const Key('interval_chip_30')), findsOneWidget);
+          expect(find.byKey(const Key('snooze_chip_5')), findsOneWidget);
+        }
+      }
+    });
+    testWidgets('Renders all quick chips and toggle with defaults', (
+      tester,
+    ) async {
       await tester.pumpWidget(
-        MaterialApp(
-          home: BreakSettingsView(sessionEngine: sessionEngine),
-        ),
+        MaterialApp(home: BreakSettingsView(sessionEngine: sessionEngine)),
       );
       await tester.pumpAndSettle();
 
       expect(find.text('Break Reminder Settings'), findsOneWidget);
-      expect(find.byKey(const Key('break_reminder_enable_switch')), findsOneWidget);
+      expect(
+        find.byKey(const Key('break_reminder_enable_switch')),
+        findsOneWidget,
+      );
       expect(find.byKey(const Key('interval_chip_30')), findsOneWidget);
       expect(find.byKey(const Key('interval_chip_45')), findsOneWidget);
       expect(find.byKey(const Key('interval_chip_60')), findsOneWidget);
@@ -467,32 +534,39 @@ void main() {
       expect(find.byKey(const Key('snooze_chip_15')), findsOneWidget);
     });
 
-    testWidgets('Shows contextual interval guidance without blocking long choices', (tester) async {
+    testWidgets(
+      'Shows contextual interval guidance without blocking long choices',
+      (tester) async {
+        await tester.pumpWidget(
+          MaterialApp(home: BreakSettingsView(sessionEngine: sessionEngine)),
+        );
+        await tester.pumpAndSettle();
+
+        expect(find.textContaining('Around 45 minutes'), findsOneWidget);
+        await tester.tap(find.byKey(const Key('interval_chip_60')));
+        await tester.pumpAndSettle();
+        expect(find.textContaining('At 60 minutes'), findsOneWidget);
+
+        await tester.tap(find.byKey(const Key('interval_chip_custom')));
+        await tester.pumpAndSettle();
+        await tester.enterText(
+          find.byKey(const Key('custom_interval_field')),
+          '90',
+        );
+        await tester.pumpAndSettle();
+        expect(find.textContaining('A longer interval delays'), findsOneWidget);
+        expect(
+          find.byKey(const Key('save_break_settings_primary_button')),
+          findsOneWidget,
+        );
+      },
+    );
+
+    testWidgets('Selecting quick interval updates state and saves to engine', (
+      tester,
+    ) async {
       await tester.pumpWidget(
-        MaterialApp(
-          home: BreakSettingsView(sessionEngine: sessionEngine),
-        ),
-      );
-      await tester.pumpAndSettle();
-
-      expect(find.textContaining('Around 45 minutes'), findsOneWidget);
-      await tester.tap(find.byKey(const Key('interval_chip_60')));
-      await tester.pumpAndSettle();
-      expect(find.textContaining('At 60 minutes'), findsOneWidget);
-
-      await tester.tap(find.byKey(const Key('interval_chip_custom')));
-      await tester.pumpAndSettle();
-      await tester.enterText(find.byKey(const Key('custom_interval_field')), '90');
-      await tester.pumpAndSettle();
-      expect(find.textContaining('A longer interval delays'), findsOneWidget);
-      expect(find.byKey(const Key('save_break_settings_primary_button')), findsOneWidget);
-    });
-
-    testWidgets('Selecting quick interval updates state and saves to engine', (tester) async {
-      await tester.pumpWidget(
-        MaterialApp(
-          home: BreakSettingsView(sessionEngine: sessionEngine),
-        ),
+        MaterialApp(home: BreakSettingsView(sessionEngine: sessionEngine)),
       );
       await tester.pumpAndSettle();
 
@@ -510,9 +584,7 @@ void main() {
 
     testWidgets('Custom interval validates 15-120 range', (tester) async {
       await tester.pumpWidget(
-        MaterialApp(
-          home: BreakSettingsView(sessionEngine: sessionEngine),
-        ),
+        MaterialApp(home: BreakSettingsView(sessionEngine: sessionEngine)),
       );
       await tester.pumpAndSettle();
 
@@ -523,13 +595,19 @@ void main() {
       expect(find.byKey(const Key('custom_interval_field')), findsOneWidget);
 
       // Enter out-of-range value (10 min)
-      await tester.enterText(find.byKey(const Key('custom_interval_field')), '10');
+      await tester.enterText(
+        find.byKey(const Key('custom_interval_field')),
+        '10',
+      );
       await tester.pumpAndSettle();
 
       expect(find.text('Must be between 15 and 120 minutes'), findsOneWidget);
 
       // Enter valid value (50 min)
-      await tester.enterText(find.byKey(const Key('custom_interval_field')), '50');
+      await tester.enterText(
+        find.byKey(const Key('custom_interval_field')),
+        '50',
+      );
       await tester.pumpAndSettle();
 
       expect(find.text('Must be between 15 and 120 minutes'), findsNothing);
@@ -544,9 +622,7 @@ void main() {
 
     testWidgets('Disabling master toggle disables reminders', (tester) async {
       await tester.pumpWidget(
-        MaterialApp(
-          home: BreakSettingsView(sessionEngine: sessionEngine),
-        ),
+        MaterialApp(home: BreakSettingsView(sessionEngine: sessionEngine)),
       );
       await tester.pumpAndSettle();
 
@@ -588,53 +664,68 @@ void main() {
       );
     }
 
-    testWidgets('Break Engine card displays visible settings icon next to heading and opens settings screen', (tester) async {
+    testWidgets(
+      'Break Engine card displays visible settings icon next to heading and opens settings screen',
+      (tester) async {
+        await tester.pumpWidget(buildTestApp());
+        await tester.pumpAndSettle();
+
+        final headingSettingsIconFinder = find.byKey(
+          const Key('break_engine_settings_icon_button'),
+        );
+        expect(headingSettingsIconFinder, findsOneWidget);
+
+        await tester.ensureVisible(headingSettingsIconFinder);
+        await tester.pumpAndSettle();
+        await tester.tap(headingSettingsIconFinder);
+        await tester.pumpAndSettle();
+
+        expect(find.text('Break Reminder Settings'), findsOneWidget);
+        expect(
+          find.byKey(const Key('break_reminder_enable_switch')),
+          findsOneWidget,
+        );
+        expect(find.byKey(const Key('interval_chip_45')), findsOneWidget);
+      },
+    );
+
+    testWidgets(
+      'Break Engine card displays visible Break Settings button and opens settings screen',
+      (tester) async {
+        await tester.pumpWidget(buildTestApp());
+        await tester.pumpAndSettle();
+
+        final cardButtonFinder = find.byKey(
+          const Key('card_break_settings_button'),
+        );
+        expect(cardButtonFinder, findsOneWidget);
+        expect(find.text('Break Settings'), findsOneWidget);
+
+        await tester.ensureVisible(cardButtonFinder);
+        await tester.pumpAndSettle();
+
+        await tester.tap(cardButtonFinder);
+        await tester.pumpAndSettle();
+
+        expect(find.text('Break Reminder Settings'), findsOneWidget);
+        expect(find.byKey(const Key('interval_chip_30')), findsOneWidget);
+      },
+    );
+
+    testWidgets('Debug simulation controls are available in Developer Tools', (
+      tester,
+    ) async {
       await tester.pumpWidget(buildTestApp());
       await tester.pumpAndSettle();
 
-      final headingSettingsIconFinder = find.byKey(const Key('break_engine_settings_icon_button'));
-      expect(headingSettingsIconFinder, findsOneWidget);
-
-      await tester.tap(headingSettingsIconFinder);
+      expect(find.byKey(const Key('btn_simulate_45m')), findsNothing);
+      await tester.tap(find.byKey(const Key('appbar_developer_tools_button')));
       await tester.pumpAndSettle();
 
-      expect(find.text('Break Reminder Settings'), findsOneWidget);
-      expect(find.byKey(const Key('break_reminder_enable_switch')), findsOneWidget);
-      expect(find.byKey(const Key('interval_chip_45')), findsOneWidget);
-    });
-
-    testWidgets('Break Engine card displays visible Break Settings button and opens settings screen', (tester) async {
-      await tester.pumpWidget(buildTestApp());
-      await tester.pumpAndSettle();
-
-      final cardButtonFinder = find.byKey(const Key('card_break_settings_button'));
-      expect(cardButtonFinder, findsOneWidget);
-      expect(find.text('Break Settings'), findsOneWidget);
-
-      await tester.ensureVisible(cardButtonFinder);
-      await tester.pumpAndSettle();
-
-      await tester.tap(cardButtonFinder);
-      await tester.pumpAndSettle();
-
-      expect(find.text('Break Reminder Settings'), findsOneWidget);
-      expect(find.byKey(const Key('interval_chip_30')), findsOneWidget);
-    });
-
-    testWidgets('Break Settings button is rendered directly below debug simulation section in Live Monitor', (tester) async {
-      await tester.pumpWidget(buildTestApp());
-      await tester.pumpAndSettle();
-
-      final debugSimHeaderFinder = find.text('DEBUG TEST SIMULATION');
-      expect(debugSimHeaderFinder, findsOneWidget);
-
-      final cardButtonFinder = find.byKey(const Key('card_break_settings_button'));
-      expect(cardButtonFinder, findsOneWidget);
-
-      // Verify button is positioned below the debug simulation section
-      final debugSimTop = tester.getTopLeft(debugSimHeaderFinder).dy;
-      final buttonTop = tester.getTopLeft(cardButtonFinder).dy;
-      expect(buttonTop, greaterThan(debugSimTop));
+      expect(find.text('Break simulation'), findsOneWidget);
+      expect(find.byKey(const Key('btn_simulate_45m')), findsOneWidget);
+      expect(find.byKey(const Key('btn_simulate_15m')), findsOneWidget);
+      expect(find.byKey(const Key('btn_reset_simulation')), findsOneWidget);
     });
   });
 }

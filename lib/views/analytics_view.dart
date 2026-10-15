@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../app_theme.dart';
 import '../database/database_adapter.dart';
 import '../models/daily_trend_point.dart';
 import '../models/device_usage_stats.dart';
@@ -219,8 +220,8 @@ class AnalyticsViewState extends State<AnalyticsView> {
                   style: TextStyle(
                     fontSize: 13,
                     fontWeight: FontWeight.bold,
-                    color: Colors.teal.shade300,
-                    letterSpacing: 0.8,
+                    color: ListeningPalette.text,
+                    letterSpacing: 0.2,
                   ),
                 ),
                 if (comparison != null && !comparison.isListeningEqual)
@@ -236,7 +237,7 @@ class AnalyticsViewState extends State<AnalyticsView> {
                       borderRadius: BorderRadius.circular(4),
                       border: Border.all(
                         color: comparison.isListeningIncreased
-                            ? Colors.greenAccent
+                            ? ListeningPalette.mint
                             : Colors.redAccent,
                         width: 0.8,
                       ),
@@ -247,7 +248,7 @@ class AnalyticsViewState extends State<AnalyticsView> {
                         fontSize: 10,
                         fontWeight: FontWeight.bold,
                         color: comparison.isListeningIncreased
-                            ? Colors.greenAccent
+                            ? ListeningPalette.mint
                             : Colors.redAccent,
                       ),
                     ),
@@ -258,13 +259,9 @@ class AnalyticsViewState extends State<AnalyticsView> {
             Container(
               width: double.infinity,
               margin: const EdgeInsets.only(bottom: 8),
-              padding: const EdgeInsets.all(12),
+              padding: const EdgeInsets.symmetric(vertical: 14),
               decoration: BoxDecoration(
-                color: Colors.teal.shade900.withValues(alpha: 0.32),
-                borderRadius: BorderRadius.circular(10),
-                border: Border.all(
-                  color: Colors.tealAccent.withValues(alpha: 0.25),
-                ),
+                color: Colors.transparent,
               ),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
@@ -279,7 +276,7 @@ class AnalyticsViewState extends State<AnalyticsView> {
                     style: const TextStyle(
                       fontSize: 24,
                       fontWeight: FontWeight.bold,
-                      color: Colors.greenAccent,
+                      color: ListeningPalette.mint,
                       fontFeatures: [FontFeature.tabularFigures()],
                     ),
                   ),
@@ -289,19 +286,19 @@ class AnalyticsViewState extends State<AnalyticsView> {
             _buildMetricRow(
               'Total Bluetooth Time',
               stats.totalConnectedFormatted,
-              valueColor: Colors.cyanAccent.shade100,
+              valueColor: ListeningPalette.cyan,
             ),
             _buildMetricRow(
               'Listening Ratio',
               '${(stats.listeningRatio * 100).toStringAsFixed(1)}%',
-              valueColor: Colors.tealAccent,
+              valueColor: ListeningPalette.mint,
             ),
             _buildMetricRow('Listening Sessions', '${stats.sessionCount}'),
             _buildMetricRow('Average Session', stats.averageSessionFormatted),
             _buildMetricRow(
               'Longest Session',
               stats.longestSessionFormatted,
-              valueColor: Colors.tealAccent.shade100,
+              valueColor: ListeningPalette.mint,
             ),
             _buildMetricRow(
               'Most-Used Device',
@@ -366,8 +363,8 @@ class AnalyticsViewState extends State<AnalyticsView> {
               style: TextStyle(
                 fontSize: 13,
                 fontWeight: FontWeight.bold,
-                color: Colors.teal.shade300,
-                letterSpacing: 0.8,
+                color: ListeningPalette.text,
+                letterSpacing: 0.2,
               ),
             ),
             const Divider(height: 16),
@@ -390,12 +387,12 @@ class AnalyticsViewState extends State<AnalyticsView> {
                 final isConnOnly = AnalyticsCalculator.isConnectionOnly(dev);
 
                 return Container(
-                  margin: const EdgeInsets.only(bottom: 10),
-                  padding: const EdgeInsets.all(10),
+                  margin: const EdgeInsets.only(bottom: 4),
+                  padding: const EdgeInsets.symmetric(vertical: 10),
                   decoration: BoxDecoration(
-                    color: Colors.grey.shade900,
-                    borderRadius: BorderRadius.circular(8),
-                    border: Border.all(color: Colors.grey.shade800),
+                    border: const Border(
+                      bottom: BorderSide(color: ListeningPalette.separator),
+                    ),
                   ),
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
@@ -431,7 +428,7 @@ class AnalyticsViewState extends State<AnalyticsView> {
                                 style: TextStyle(
                                   fontSize: 9,
                                   fontWeight: FontWeight.bold,
-                                  color: Colors.amberAccent,
+                                  color: ListeningPalette.amber,
                                 ),
                               ),
                             ),
@@ -446,7 +443,7 @@ class AnalyticsViewState extends State<AnalyticsView> {
                                 child: _buildDeviceMetric(
                                   'Listening',
                                   dev.totalListeningFormatted,
-                                  Colors.greenAccent,
+                                  ListeningPalette.mint,
                                 ),
                               ),
                               const SizedBox(width: 10),
@@ -454,7 +451,7 @@ class AnalyticsViewState extends State<AnalyticsView> {
                                 child: _buildDeviceMetric(
                                   'Connected',
                                   dev.totalConnectedFormatted,
-                                  Colors.cyanAccent.shade100,
+                                  ListeningPalette.cyan,
                                 ),
                               ),
                             ],
@@ -474,7 +471,7 @@ class AnalyticsViewState extends State<AnalyticsView> {
                                 child: _buildDeviceMetric(
                                   'Ratio',
                                   '${(dev.listeningRatio * 100).toStringAsFixed(0)}%',
-                                  Colors.tealAccent,
+                                  ListeningPalette.mint,
                                 ),
                               ),
                             ],
@@ -529,8 +526,8 @@ class AnalyticsViewState extends State<AnalyticsView> {
               style: TextStyle(
                 fontSize: 13,
                 fontWeight: FontWeight.bold,
-                color: Colors.teal.shade300,
-                letterSpacing: 0.8,
+                color: ListeningPalette.text,
+                letterSpacing: 0.2,
               ),
             ),
             const Divider(height: 16),
@@ -575,21 +572,18 @@ class AnalyticsViewState extends State<AnalyticsView> {
                 style: const TextStyle(
                   fontSize: 12,
                   fontWeight: FontWeight.bold,
-                  color: Colors.greenAccent,
+                  color: ListeningPalette.mint,
                   fontFeatures: [FontFeature.tabularFigures()],
                 ),
               ),
               Text(
                 '/ ${point.connectedFormatted}',
-                style: TextStyle(
-                  fontSize: 11,
-                  color: Colors.cyanAccent.shade100,
-                ),
+                style: TextStyle(fontSize: 11, color: ListeningPalette.cyan),
               ),
               Container(
                 padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
                 decoration: BoxDecoration(
-                  color: Colors.teal.shade900.withValues(alpha: 0.5),
+                  color: ListeningPalette.surfaceRaised,
                   borderRadius: BorderRadius.circular(3),
                 ),
                 child: Text(
@@ -597,7 +591,7 @@ class AnalyticsViewState extends State<AnalyticsView> {
                   style: const TextStyle(
                     fontSize: 10,
                     fontWeight: FontWeight.bold,
-                    color: Colors.tealAccent,
+                    color: ListeningPalette.mint,
                   ),
                 ),
               ),
@@ -652,9 +646,9 @@ class AnalyticsViewState extends State<AnalyticsView> {
               child: LinearProgressIndicator(
                 value: progress,
                 minHeight: 5,
-                backgroundColor: Colors.white10,
+                backgroundColor: ListeningPalette.separator,
                 valueColor: const AlwaysStoppedAnimation<Color>(
-                  Colors.tealAccent,
+                  ListeningPalette.mint,
                 ),
               ),
             ),

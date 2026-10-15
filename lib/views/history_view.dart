@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../app_theme.dart';
 import '../database/database_adapter.dart';
 import '../models/listening_session.dart';
 import '../models/period_stats.dart';
@@ -109,10 +110,10 @@ class HistoryViewState extends State<HistoryView> {
         return Theme(
           data: Theme.of(context).copyWith(
             colorScheme: ColorScheme.dark(
-              primary: Colors.teal.shade300,
-              onPrimary: Colors.black,
-              surface: Colors.grey.shade900,
-              onSurface: Colors.white,
+              primary: ListeningPalette.mint,
+              onPrimary: ListeningPalette.background,
+              surface: ListeningPalette.surface,
+              onSurface: ListeningPalette.text,
             ),
           ),
           child: child!,
@@ -222,7 +223,7 @@ class HistoryViewState extends State<HistoryView> {
                       const Icon(
                         Icons.calendar_today,
                         size: 16,
-                        color: Colors.tealAccent,
+                        color: ListeningPalette.mint,
                       ),
                       const SizedBox(width: 8),
                       Flexible(
@@ -270,68 +271,132 @@ class HistoryViewState extends State<HistoryView> {
 
   Widget _buildDailySummaryCard() {
     final stats = _dayStats ?? PeriodStats.empty(_selectedDate, _selectedDate);
+    final metrics = [
+      (
+        'Bluetooth connected',
+        stats.totalConnectedFormatted,
+        ListeningPalette.cyan,
+      ),
+      ('Longest session', stats.longestSessionFormatted, ListeningPalette.mint),
+      ('Listening sessions', '${stats.sessionCount}', ListeningPalette.text),
+      ('Silent / paused', stats.totalSilentFormatted, ListeningPalette.muted),
+    ];
 
     return Container(
-      padding: const EdgeInsets.all(14),
+      padding: const EdgeInsets.all(18),
       decoration: BoxDecoration(
-        color: const Color(0xFF142229),
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: Colors.tealAccent.withValues(alpha: 0.2)),
+        color: ListeningPalette.surface,
+        borderRadius: BorderRadius.circular(18),
       ),
-      child: Padding(
-        padding: EdgeInsets.zero,
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              children: [
-                Expanded(
-                  child: Text(
-                    'Daily Summary',
-                    style: TextStyle(
-                      fontSize: 13,
-                      fontWeight: FontWeight.bold,
-                      color: Colors.teal.shade300,
-                      letterSpacing: 0.8,
-                    ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Expanded(
+                child: Text(
+                  'Daily Summary',
+                  style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                    color: ListeningPalette.text,
+                    fontWeight: FontWeight.w700,
                   ),
                 ),
-                IconButton(
-                  key: const Key('history_refresh_button'),
-                  icon: const Icon(Icons.refresh, size: 18),
-                  padding: EdgeInsets.zero,
-                  visualDensity: VisualDensity.compact,
-                  constraints: const BoxConstraints(),
-                  tooltip: 'Refresh history',
-                  onPressed: _loadHistoryData,
+              ),
+              IconButton(
+                key: const Key('history_refresh_button'),
+                icon: const Icon(Icons.refresh, size: 18),
+                padding: EdgeInsets.zero,
+                visualDensity: VisualDensity.compact,
+                constraints: const BoxConstraints(),
+                tooltip: 'Refresh history',
+                onPressed: _loadHistoryData,
+              ),
+            ],
+          ),
+          const SizedBox(height: 10),
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.symmetric(vertical: 14),
+            decoration: BoxDecoration(
+              color: Colors.transparent,
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'Active listening',
+                  style: Theme.of(context).textTheme.bodyMedium
+                      ?.copyWith(color: ListeningPalette.muted),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  stats.totalListeningFormatted,
+                  style: Theme.of(context).textTheme.headlineMedium?.copyWith(
+                    color: ListeningPalette.mint,
+                    fontWeight: FontWeight.w700,
+                    fontFeatures: const [FontFeature.tabularFigures()],
+                  ),
                 ),
               ],
             ),
-            const Divider(height: 16),
-            _buildSummaryRow(
-              'Active Listening',
-              stats.totalListeningFormatted,
-              valueColor: Colors.greenAccent,
-              isBold: true,
+          ),
+          const SizedBox(height: 10),
+          LayoutBuilder(
+            builder: (context, constraints) {
+              const gap = 10.0;
+              final columns = constraints.maxWidth >= 280 ? 2 : 1;
+              final cellWidth = columns == 2
+                  ? (constraints.maxWidth - gap) / 2
+                  : constraints.maxWidth;
+              return Wrap(
+                spacing: gap,
+                runSpacing: gap,
+                children: [
+                  for (final (label, value, color) in metrics)
+                    SizedBox(
+                      width: cellWidth,
+                      child: _buildSummaryMetric(label, value, color),
+                    ),
+                ],
+              );
+            },
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildSummaryMetric(String label, String value, Color color) {
+    return Container(
+      constraints: const BoxConstraints(minHeight: 64),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      decoration: BoxDecoration(
+        color: ListeningPalette.surfaceRaised,
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          Text(
+            label,
+            maxLines: 2,
+            overflow: TextOverflow.ellipsis,
+            style: Theme.of(context).textTheme.bodySmall
+                ?.copyWith(color: ListeningPalette.muted),
+          ),
+          const SizedBox(height: 5),
+          Text(
+            value,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: Theme.of(context).textTheme.titleMedium?.copyWith(
+              color: color,
+              fontWeight: FontWeight.w700,
+              fontFeatures: const [FontFeature.tabularFigures()],
             ),
-            _buildSummaryRow(
-              'Bluetooth Connected',
-              stats.totalConnectedFormatted,
-              valueColor: Colors.cyanAccent.shade100,
-            ),
-            _buildSummaryRow(
-              'Silent / Paused',
-              stats.totalSilentFormatted,
-              valueColor: Colors.grey.shade300,
-            ),
-            _buildSummaryRow('Listening Sessions', '${stats.sessionCount}'),
-            _buildSummaryRow(
-              'Longest Session',
-              stats.longestSessionFormatted,
-              valueColor: Colors.tealAccent.shade100,
-            ),
-          ],
-        ),
+          ),
+        ],
       ),
     );
   }
@@ -386,8 +451,8 @@ class HistoryViewState extends State<HistoryView> {
             style: TextStyle(
               fontSize: 13,
               fontWeight: FontWeight.bold,
-              color: Colors.teal.shade300,
-              letterSpacing: 0.8,
+              color: ListeningPalette.text,
+              letterSpacing: 0.2,
             ),
           ),
           const SizedBox(height: 3),
@@ -408,10 +473,10 @@ class HistoryViewState extends State<HistoryView> {
 
     return Card(
       key: Key('history_session_${s.id}'),
-      color: const Color(0xFF171C23),
+      color: ListeningPalette.surface,
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(12),
-        side: BorderSide(color: Colors.tealAccent.withValues(alpha: 0.12)),
+        side: const BorderSide(color: ListeningPalette.separator),
       ),
       margin: const EdgeInsets.only(bottom: 8),
       child: Padding(
@@ -428,7 +493,7 @@ class HistoryViewState extends State<HistoryView> {
                       ? Icons.bluetooth
                       : Icons.headphones,
                   size: 18,
-                  color: Colors.tealAccent,
+                  color: ListeningPalette.mint,
                 ),
                 const SizedBox(width: 8),
                 Expanded(
@@ -462,13 +527,13 @@ class HistoryViewState extends State<HistoryView> {
             _buildSummaryRow(
               'Listening Time',
               s.activeListeningDurationFormatted,
-              valueColor: Colors.greenAccent,
+              valueColor: ListeningPalette.mint,
               isBold: true,
             ),
             _buildSummaryRow(
               'Connected Time',
               s.connectedDurationFormatted,
-              valueColor: Colors.cyanAccent.shade100,
+              valueColor: ListeningPalette.cyan,
             ),
             _buildSummaryRow(
               'Silent / Paused',
