@@ -14,6 +14,7 @@ ListeningSession _createSession({
   int activeListeningDurationSeconds = 0,
   int connectedDurationSeconds = 0,
   int silentDurationSeconds = 0,
+  String status = 'active',
 }) {
   return ListeningSession(
     id: id,
@@ -24,6 +25,7 @@ ListeningSession _createSession({
     connectedDurationSeconds: connectedDurationSeconds,
     activeListeningDurationSeconds: activeListeningDurationSeconds,
     silentDurationSeconds: silentDurationSeconds,
+    status: status,
   );
 }
 
@@ -86,6 +88,105 @@ void main() {
     });
   });
 
+  group('WeeklyListeningInsights Tests', () {
+    test('week boundaries use Monday as local calendar week start', () {
+      expect(
+        AnalyticsCalculator.startOfLocalWeek(DateTime(2026, 10, 12, 18)),
+        DateTime(2026, 10, 12),
+      );
+      expect(
+        AnalyticsCalculator.startOfLocalWeek(DateTime(2026, 10, 18, 23, 59)),
+        DateTime(2026, 10, 12),
+      );
+      expect(
+        AnalyticsCalculator.startOfLocalWeek(DateTime(2026, 10, 19)),
+        DateTime(2026, 10, 19),
+      );
+    });
+
+    test(
+      'totals group sessions by local start date through the reference day',
+      () {
+        final referenceDate = DateTime(2026, 10, 16, 12);
+        final insights = AnalyticsCalculator.buildWeeklyListeningInsights(
+          referenceDate: referenceDate,
+          sessions: [
+            _createSession(
+              id: 'monday',
+              deviceId: 'headphones',
+              connectedAt: DateTime(2026, 10, 12, 9),
+              activeListeningDurationSeconds: 1200,
+              status: 'completed',
+            ),
+            _createSession(
+              id: 'tuesday-a',
+              deviceId: 'headphones',
+              connectedAt: DateTime(2026, 10, 13, 8),
+              activeListeningDurationSeconds: 300,
+            ),
+            _createSession(
+              id: 'tuesday-b',
+              deviceId: 'headphones',
+              connectedAt: DateTime(2026, 10, 13, 10),
+              activeListeningDurationSeconds: 600,
+            ),
+            _createSession(
+              id: 'active-friday',
+              deviceId: 'headphones',
+              connectedAt: DateTime(2026, 10, 16, 9),
+              activeListeningDurationSeconds: 900,
+              status: 'active',
+            ),
+            _createSession(
+              id: 'previous-week',
+              deviceId: 'headphones',
+              connectedAt: DateTime(2026, 10, 11, 23, 59),
+              activeListeningDurationSeconds: 5000,
+            ),
+            _createSession(
+              id: 'later-today',
+              deviceId: 'headphones',
+              connectedAt: DateTime(2026, 10, 16, 13),
+              activeListeningDurationSeconds: 7000,
+            ),
+          ],
+        );
+
+        expect(insights.weekStart, DateTime(2026, 10, 12));
+        expect(insights.weekEndExclusive, DateTime(2026, 10, 19));
+        expect(insights.throughDate, DateTime(2026, 10, 16));
+        expect(insights.dailyTrends, hasLength(5));
+        expect(insights.dailyTrends[0].sessionCount, 1);
+        expect(insights.dailyTrends[1].sessionCount, 2);
+        expect(insights.dailyTrends[2].sessionCount, 0);
+        expect(insights.dailyTrends[4].listeningSeconds, 900);
+        expect(insights.totalListeningSeconds, 3000);
+        expect(insights.totalSessionCount, 4);
+        expect(insights.totalListeningFormatted, '50m');
+        expect(insights.hasSessions, isTrue);
+      },
+    );
+
+    test(
+      'empty week contains zero-valued days only through reference date',
+      () {
+        final insights = AnalyticsCalculator.buildWeeklyListeningInsights(
+          referenceDate: DateTime(2026, 10, 14, 16),
+          sessions: const [],
+        );
+
+        expect(insights.dailyTrends, hasLength(3));
+        expect(insights.totalListeningSeconds, 0);
+        expect(insights.totalSessionCount, 0);
+        expect(insights.hasSessions, isFalse);
+        expect(
+          insights.dailyTrends.every((point) => !point.hasActivity),
+          isTrue,
+        );
+      },
+    );
+  });
+
   group('PeriodComparison Model Tests', () {
     test('calculates differences and percentage changes', () {
       final start1 = DateTime(2026, 10, 1);
@@ -129,7 +230,10 @@ void main() {
     });
 
     test('zero denominator handling never produces NaN or Infinity', () {
-      final emptyPrevious = PeriodStats.empty(DateTime(2026, 10, 1), DateTime(2026, 10, 7));
+      final emptyPrevious = PeriodStats.empty(
+        DateTime(2026, 10, 1),
+        DateTime(2026, 10, 7),
+      );
       final currentWithListening = PeriodStats(
         startDate: DateTime(2026, 10, 8),
         endDate: DateTime(2026, 10, 14),
@@ -142,12 +246,18 @@ void main() {
         longestSessionSeconds: 900,
       );
 
-      final comp = PeriodComparison(current: currentWithListening, previous: emptyPrevious);
+      final comp = PeriodComparison(
+        current: currentWithListening,
+        previous: emptyPrevious,
+      );
 
       expect(comp.listeningPercentageChange, equals(100.0));
       expect(comp.listeningPercentageChange.isFinite, isTrue);
 
-      final bothEmpty = PeriodComparison(current: emptyPrevious, previous: emptyPrevious);
+      final bothEmpty = PeriodComparison(
+        current: emptyPrevious,
+        previous: emptyPrevious,
+      );
       expect(bothEmpty.listeningPercentageChange, equals(0.0));
       expect(bothEmpty.connectedPercentageChange, equals(0.0));
       expect(bothEmpty.isListeningEqual, isTrue);
@@ -156,7 +266,10 @@ void main() {
 
   group('A. Average Session Duration Calculations', () {
     test('normal values calculate correctly', () {
-      expect(AnalyticsCalculator.calculateAverageSessionSeconds(1800, 3), equals(600));
+      expect(
+        AnalyticsCalculator.calculateAverageSessionSeconds(1800, 3),
+        equals(600),
+      );
       expect(
         AnalyticsCalculator.calculateAverageSessionDuration(1800, 3),
         equals(const Duration(seconds: 600)),
@@ -164,36 +277,73 @@ void main() {
     });
 
     test('zero sessions returns 0 safely without division-by-zero', () {
-      expect(AnalyticsCalculator.calculateAverageSessionSeconds(1800, 0), equals(0));
-      expect(AnalyticsCalculator.calculateAverageSessionSeconds(0, 0), equals(0));
-      expect(AnalyticsCalculator.calculateAverageSessionSeconds(-100, 2), equals(0));
-      expect(AnalyticsCalculator.calculateAverageSessionSeconds(500, -1), equals(0));
+      expect(
+        AnalyticsCalculator.calculateAverageSessionSeconds(1800, 0),
+        equals(0),
+      );
+      expect(
+        AnalyticsCalculator.calculateAverageSessionSeconds(0, 0),
+        equals(0),
+      );
+      expect(
+        AnalyticsCalculator.calculateAverageSessionSeconds(-100, 2),
+        equals(0),
+      );
+      expect(
+        AnalyticsCalculator.calculateAverageSessionSeconds(500, -1),
+        equals(0),
+      );
     });
 
     test('fractional and rounding behavior uses standard rounding', () {
       // 100 / 3 = 33.333 -> 33
-      expect(AnalyticsCalculator.calculateAverageSessionSeconds(100, 3), equals(33));
+      expect(
+        AnalyticsCalculator.calculateAverageSessionSeconds(100, 3),
+        equals(33),
+      );
       // 101 / 3 = 33.666 -> 34
-      expect(AnalyticsCalculator.calculateAverageSessionSeconds(101, 3), equals(34));
+      expect(
+        AnalyticsCalculator.calculateAverageSessionSeconds(101, 3),
+        equals(34),
+      );
       // 100 / 6 = 16.666 -> 17
-      expect(AnalyticsCalculator.calculateAverageSessionSeconds(100, 6), equals(17));
+      expect(
+        AnalyticsCalculator.calculateAverageSessionSeconds(100, 6),
+        equals(17),
+      );
     });
 
     test('averageSessionSecondsFromSessions calculates from session list', () {
       final now = DateTime(2026, 10, 5);
       final sessions = [
-        _createSession(id: 's1', deviceId: 'd1', connectedAt: now, activeListeningDurationSeconds: 400),
-        _createSession(id: 's2', deviceId: 'd1', connectedAt: now, activeListeningDurationSeconds: 600),
+        _createSession(
+          id: 's1',
+          deviceId: 'd1',
+          connectedAt: now,
+          activeListeningDurationSeconds: 400,
+        ),
+        _createSession(
+          id: 's2',
+          deviceId: 'd1',
+          connectedAt: now,
+          activeListeningDurationSeconds: 600,
+        ),
       ];
 
-      expect(AnalyticsCalculator.averageSessionSecondsFromSessions(sessions), equals(500));
+      expect(
+        AnalyticsCalculator.averageSessionSecondsFromSessions(sessions),
+        equals(500),
+      );
       expect(
         AnalyticsCalculator.averageSessionDurationFromSessions(sessions),
         equals(const Duration(seconds: 500)),
       );
 
       // Empty list
-      expect(AnalyticsCalculator.averageSessionSecondsFromSessions([]), equals(0));
+      expect(
+        AnalyticsCalculator.averageSessionSecondsFromSessions([]),
+        equals(0),
+      );
       expect(
         AnalyticsCalculator.averageSessionDurationFromSessions([]),
         equals(Duration.zero),
@@ -203,7 +353,10 @@ void main() {
 
   group('B. Listening Ratio Calculations', () {
     test('normal case produces expected ratio', () {
-      expect(AnalyticsCalculator.calculateListeningRatio(600, 1200), equals(0.5));
+      expect(
+        AnalyticsCalculator.calculateListeningRatio(600, 1200),
+        equals(0.5),
+      );
     });
 
     test('zero connection time returns 0.0 safely without NaN or Infinity', () {
@@ -214,16 +367,31 @@ void main() {
     });
 
     test('listening time equal to connection time returns 1.0', () {
-      expect(AnalyticsCalculator.calculateListeningRatio(1200, 1200), equals(1.0));
+      expect(
+        AnalyticsCalculator.calculateListeningRatio(1200, 1200),
+        equals(1.0),
+      );
     });
 
-    test('listening time greater than connection time clamps safely to 1.0', () {
-      expect(AnalyticsCalculator.calculateListeningRatio(1500, 1000), equals(1.0));
-    });
+    test(
+      'listening time greater than connection time clamps safely to 1.0',
+      () {
+        expect(
+          AnalyticsCalculator.calculateListeningRatio(1500, 1000),
+          equals(1.0),
+        );
+      },
+    );
 
     test('negative values return 0.0 safely', () {
-      expect(AnalyticsCalculator.calculateListeningRatio(-500, 1000), equals(0.0));
-      expect(AnalyticsCalculator.calculateListeningRatio(500, -1000), equals(0.0));
+      expect(
+        AnalyticsCalculator.calculateListeningRatio(-500, 1000),
+        equals(0.0),
+      );
+      expect(
+        AnalyticsCalculator.calculateListeningRatio(500, -1000),
+        equals(0.0),
+      );
     });
 
     test('helpers from stats and device usage models match', () {
@@ -238,7 +406,10 @@ void main() {
         devicesUsedCount: 1,
         longestSessionSeconds: 1500,
       );
-      expect(AnalyticsCalculator.calculateListeningRatioFromStats(period), equals(0.5));
+      expect(
+        AnalyticsCalculator.calculateListeningRatioFromStats(period),
+        equals(0.5),
+      );
 
       final dev = DeviceUsageStats(
         deviceId: 'd1',
@@ -247,7 +418,10 @@ void main() {
         totalConnectedSeconds: 2000,
         sessionCount: 1,
       );
-      expect(AnalyticsCalculator.calculateDeviceListeningRatio(dev), equals(0.5));
+      expect(
+        AnalyticsCalculator.calculateDeviceListeningRatio(dev),
+        equals(0.5),
+      );
     });
   });
 
@@ -279,7 +453,10 @@ void main() {
       ];
 
       // CRITICAL METRIC RULE: must use activeListeningDurationSeconds, NOT connectedDurationSeconds
-      expect(AnalyticsCalculator.findLongestSessionSeconds(sessions), equals(1800));
+      expect(
+        AnalyticsCalculator.findLongestSessionSeconds(sessions),
+        equals(1800),
+      );
       final longest = AnalyticsCalculator.findLongestSession(sessions);
       expect(longest, isNotNull);
       expect(longest!.id, equals('s2'));
@@ -295,8 +472,14 @@ void main() {
         activeListeningDurationSeconds: 450,
       );
 
-      expect(AnalyticsCalculator.findLongestSessionSeconds([session]), equals(450));
-      expect(AnalyticsCalculator.findLongestSession([session])?.id, equals('s_only'));
+      expect(
+        AnalyticsCalculator.findLongestSessionSeconds([session]),
+        equals(450),
+      );
+      expect(
+        AnalyticsCalculator.findLongestSession([session])?.id,
+        equals('s_only'),
+      );
     });
 
     test('empty list returns 0 and null', () {
@@ -329,7 +512,11 @@ void main() {
         sessionCount: 1,
       );
 
-      final mostUsed = AnalyticsCalculator.findMostUsedDevice([dev1, dev2, dev3]);
+      final mostUsed = AnalyticsCalculator.findMostUsedDevice([
+        dev1,
+        dev2,
+        dev3,
+      ]);
       expect(mostUsed, isNotNull);
       expect(mostUsed!.deviceId, equals('dev_2'));
       expect(mostUsed.totalListeningSeconds, equals(2500));
@@ -338,13 +525,38 @@ void main() {
     test('same device with multiple sessions in aggregate', () {
       final now = DateTime(2026, 10, 5);
       final sessions = [
-        _createSession(id: 's1', deviceId: 'd_sony', activeListeningDurationSeconds: 600, connectedAt: now),
-        _createSession(id: 's2', deviceId: 'd_sony', activeListeningDurationSeconds: 800, connectedAt: now),
-        _createSession(id: 's3', deviceId: 'd_buds', activeListeningDurationSeconds: 1000, connectedAt: now),
+        _createSession(
+          id: 's1',
+          deviceId: 'd_sony',
+          activeListeningDurationSeconds: 600,
+          connectedAt: now,
+        ),
+        _createSession(
+          id: 's2',
+          deviceId: 'd_sony',
+          activeListeningDurationSeconds: 800,
+          connectedAt: now,
+        ),
+        _createSession(
+          id: 's3',
+          deviceId: 'd_buds',
+          activeListeningDurationSeconds: 1000,
+          connectedAt: now,
+        ),
       ];
       final connections = [
-        _createConnectionRecord(id: 'c1', deviceId: 'd_sony', durationSeconds: 2000, connectedAt: now),
-        _createConnectionRecord(id: 'c2', deviceId: 'd_buds', durationSeconds: 1500, connectedAt: now),
+        _createConnectionRecord(
+          id: 'c1',
+          deviceId: 'd_sony',
+          durationSeconds: 2000,
+          connectedAt: now,
+        ),
+        _createConnectionRecord(
+          id: 'c2',
+          deviceId: 'd_buds',
+          durationSeconds: 1500,
+          connectedAt: now,
+        ),
       ];
 
       final aggregated = AnalyticsCalculator.aggregateDeviceUsageFromRecords(
@@ -431,7 +643,10 @@ void main() {
         sessionCount: 0,
       );
 
-      final top = AnalyticsCalculator.findMostUsedDevice([connOnly2, connOnly1]);
+      final top = AnalyticsCalculator.findMostUsedDevice([
+        connOnly2,
+        connOnly1,
+      ]);
       expect(top, isNotNull);
       expect(top!.deviceId, equals('dev_car'));
       expect(top.totalConnectedSeconds, equals(3600));
@@ -571,18 +786,39 @@ void main() {
   });
 
   group('F. Device Analytics Calculations', () {
-    test('sortDeviceUsage sorts by listening DESC, connected DESC, count DESC', () {
-      final devices = [
-        DeviceUsageStats(deviceId: 'd3', deviceName: '3', totalListeningSeconds: 100, totalConnectedSeconds: 100, sessionCount: 1),
-        DeviceUsageStats(deviceId: 'd1', deviceName: '1', totalListeningSeconds: 500, totalConnectedSeconds: 1000, sessionCount: 2),
-        DeviceUsageStats(deviceId: 'd2', deviceName: '2', totalListeningSeconds: 300, totalConnectedSeconds: 500, sessionCount: 1),
-      ];
+    test(
+      'sortDeviceUsage sorts by listening DESC, connected DESC, count DESC',
+      () {
+        final devices = [
+          DeviceUsageStats(
+            deviceId: 'd3',
+            deviceName: '3',
+            totalListeningSeconds: 100,
+            totalConnectedSeconds: 100,
+            sessionCount: 1,
+          ),
+          DeviceUsageStats(
+            deviceId: 'd1',
+            deviceName: '1',
+            totalListeningSeconds: 500,
+            totalConnectedSeconds: 1000,
+            sessionCount: 2,
+          ),
+          DeviceUsageStats(
+            deviceId: 'd2',
+            deviceName: '2',
+            totalListeningSeconds: 300,
+            totalConnectedSeconds: 500,
+            sessionCount: 1,
+          ),
+        ];
 
-      final sorted = AnalyticsCalculator.sortDeviceUsage(devices);
-      expect(sorted[0].deviceId, equals('d1'));
-      expect(sorted[1].deviceId, equals('d2'));
-      expect(sorted[2].deviceId, equals('d3'));
-    });
+        final sorted = AnalyticsCalculator.sortDeviceUsage(devices);
+        expect(sorted[0].deviceId, equals('d1'));
+        expect(sorted[1].deviceId, equals('d2'));
+        expect(sorted[2].deviceId, equals('d3'));
+      },
+    );
 
     test('connection-only device detection and filtering', () {
       final active = DeviceUsageStats(
@@ -612,11 +848,15 @@ void main() {
       expect(AnalyticsCalculator.isConnectionOnly(zeroAll), isFalse);
 
       final list = [active, connOnly, zeroAll];
-      final filteredConn = AnalyticsCalculator.filterConnectionOnlyDevices(list);
+      final filteredConn = AnalyticsCalculator.filterConnectionOnlyDevices(
+        list,
+      );
       expect(filteredConn.length, equals(1));
       expect(filteredConn.first.deviceId, equals('d_conn'));
 
-      final filteredActive = AnalyticsCalculator.filterActiveListeningDevices(list);
+      final filteredActive = AnalyticsCalculator.filterActiveListeningDevices(
+        list,
+      );
       expect(filteredActive.length, equals(1));
       expect(filteredActive.first.deviceId, equals('d_active'));
     });
@@ -624,11 +864,29 @@ void main() {
     test('aggregateDeviceUsageFromRecords aggregates correctly', () {
       final now = DateTime(2026, 10, 5);
       final sessions = [
-        _createSession(id: 's1', deviceId: 'dev_1', deviceName: 'Headphones', connectedAt: now, activeListeningDurationSeconds: 400),
-        _createSession(id: 's2', deviceId: 'dev_1', deviceName: 'Headphones', connectedAt: now, activeListeningDurationSeconds: 600),
+        _createSession(
+          id: 's1',
+          deviceId: 'dev_1',
+          deviceName: 'Headphones',
+          connectedAt: now,
+          activeListeningDurationSeconds: 400,
+        ),
+        _createSession(
+          id: 's2',
+          deviceId: 'dev_1',
+          deviceName: 'Headphones',
+          connectedAt: now,
+          activeListeningDurationSeconds: 600,
+        ),
       ];
       final connections = [
-        _createConnectionRecord(id: 'c1', deviceId: 'dev_1', deviceName: 'Headphones', connectedAt: now, durationSeconds: 1500),
+        _createConnectionRecord(
+          id: 'c1',
+          deviceId: 'dev_1',
+          deviceName: 'Headphones',
+          connectedAt: now,
+          durationSeconds: 1500,
+        ),
       ];
 
       final aggregated = AnalyticsCalculator.aggregateDeviceUsageFromRecords(
@@ -647,7 +905,10 @@ void main() {
 
   group('G. Empty/Invalid Data Resilience', () {
     test('no exceptions, no NaN, no Infinity across all calculations', () {
-      expect(AnalyticsCalculator.calculateAverageSessionSeconds(0, 0), equals(0));
+      expect(
+        AnalyticsCalculator.calculateAverageSessionSeconds(0, 0),
+        equals(0),
+      );
       expect(AnalyticsCalculator.calculateListeningRatio(0, 0), equals(0.0));
       expect(AnalyticsCalculator.findLongestSessionSeconds([]), equals(0));
       expect(AnalyticsCalculator.findLongestSession([]), isNull);

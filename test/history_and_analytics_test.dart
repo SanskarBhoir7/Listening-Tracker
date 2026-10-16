@@ -3,8 +3,28 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:listening_tracker/database/database_adapter.dart';
 import 'package:listening_tracker/models/connection_record.dart';
 import 'package:listening_tracker/models/listening_session.dart';
+import 'package:listening_tracker/services/analytics_calculator.dart';
 import 'package:listening_tracker/views/analytics_view.dart';
 import 'package:listening_tracker/views/history_view.dart';
+
+ListeningSession _weeklySession({
+  required String id,
+  required DateTime connectedAt,
+  required int listeningSeconds,
+  String status = 'completed',
+}) {
+  return ListeningSession(
+    id: id,
+    deviceId: 'weekly-headphones',
+    deviceName: 'Weekly headphones',
+    deviceType: 'Bluetooth',
+    connectedAt: connectedAt,
+    connectedDurationSeconds: listeningSeconds,
+    activeListeningDurationSeconds: listeningSeconds,
+    silentDurationSeconds: 0,
+    status: status,
+  );
+}
 
 void main() {
   late InMemoryDatabaseAdapter db;
@@ -603,6 +623,75 @@ void main() {
       expect(find.text('0.0%'), findsOneWidget); // Zero ratio
       expect(find.text('None'), findsOneWidget); // Most-used device
       expect(find.text('No device activity in this period.'), findsOneWidget);
+      expect(find.text('No listening sessions this week yet.'), findsOneWidget);
+    });
+
+    testWidgets('Weekly insights summarize duration and sessions by day', (
+      tester,
+    ) async {
+      final now = DateTime.now();
+      final weekStart = AnalyticsCalculator.startOfLocalWeek(now);
+      await db.saveDeviceSession(
+        _weeklySession(
+          id: 'week-monday',
+          connectedAt: weekStart,
+          listeningSeconds: 900,
+        ),
+      );
+      await db.saveDeviceSession(
+        _weeklySession(
+          id: 'week-today-active',
+          connectedAt: DateTime(now.year, now.month, now.day),
+          listeningSeconds: 1800,
+          status: 'active',
+        ),
+      );
+
+      await tester.pumpWidget(buildTestApp(child: AnalyticsView(database: db)));
+      await tester.pumpAndSettle();
+
+      expect(find.byKey(const Key('weekly_insights_card')), findsOneWidget);
+      expect(
+        find.descendant(
+          of: find.byKey(const Key('weekly_total_duration')),
+          matching: find.text('45m'),
+        ),
+        findsOneWidget,
+      );
+      expect(
+        find.descendant(
+          of: find.byKey(const Key('weekly_session_count')),
+          matching: find.text('2'),
+        ),
+        findsOneWidget,
+      );
+      expect(find.byKey(const Key('weekly_trend_chart')), findsOneWidget);
+      expect(find.byKey(const Key('weekly_empty_state')), findsNothing);
+      expect(tester.takeException(), isNull);
+    });
+
+    testWidgets('Weekly trend handles narrow width and larger text', (
+      tester,
+    ) async {
+      tester.view.physicalSize = const Size(320, 800);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(() => tester.view.resetPhysicalSize());
+      final now = DateTime.now();
+      await db.saveDeviceSession(
+        _weeklySession(
+          id: 'week-narrow-chart',
+          connectedAt: DateTime(now.year, now.month, now.day),
+          listeningSeconds: 1800,
+        ),
+      );
+
+      await tester.pumpWidget(
+        buildTestApp(child: AnalyticsView(database: db), textScaleFactor: 1.8),
+      );
+      await tester.pumpAndSettle();
+
+      expect(find.byKey(const Key('weekly_trend_chart')), findsOneWidget);
+      expect(tester.takeException(), isNull);
     });
   });
 
