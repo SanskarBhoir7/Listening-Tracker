@@ -6,6 +6,7 @@ import '../models/daily_trend_point.dart';
 import '../models/device_usage_stats.dart';
 import '../models/period_comparison.dart';
 import '../models/period_stats.dart';
+import '../models/weekly_listening_insights.dart';
 import '../services/analytics_calculator.dart';
 
 enum AnalyticsPeriod { today, last7Days, last30Days }
@@ -34,6 +35,7 @@ class AnalyticsViewState extends State<AnalyticsView> {
   List<DeviceUsageStats> _deviceStats = [];
   List<DailyTrendPoint> _dailyTrends = [];
   DeviceUsageStats? _mostUsedDevice;
+  WeeklyListeningInsights? _weeklyInsights;
 
   @override
   void initState() {
@@ -55,6 +57,11 @@ class AnalyticsViewState extends State<AnalyticsView> {
 
     final now = DateTime.now();
     final todayEnd = DateTime(now.year, now.month, now.day, 23, 59, 59, 999);
+    final weekStart = AnalyticsCalculator.startOfLocalWeek(now);
+    final weeklySessionsFuture = widget.database.getDeviceSessionsForDateRange(
+      weekStart,
+      now,
+    );
 
     late final DateTime rangeStart;
     late final DateTime prevStart;
@@ -111,6 +118,11 @@ class AnalyticsViewState extends State<AnalyticsView> {
       sessions: sessions,
       connectionRecords: connections,
     );
+    final weeklySessions = await weeklySessionsFuture;
+    final weeklyInsights = AnalyticsCalculator.buildWeeklyListeningInsights(
+      referenceDate: now,
+      sessions: weeklySessions,
+    );
 
     if (mounted) {
       setState(() {
@@ -119,6 +131,7 @@ class AnalyticsViewState extends State<AnalyticsView> {
         _deviceStats = sortedDevices;
         _dailyTrends = trends;
         _mostUsedDevice = mostUsed;
+        _weeklyInsights = weeklyInsights;
         _isLoading = false;
       });
     }
@@ -150,6 +163,10 @@ class AnalyticsViewState extends State<AnalyticsView> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
+          if (_weeklyInsights case final insights?) ...[
+            _buildWeeklyInsightsCard(insights),
+            const SizedBox(height: 12),
+          ],
           _buildPeriodSelector(),
           const SizedBox(height: 12),
           if (_isLoading)
@@ -167,6 +184,217 @@ class AnalyticsViewState extends State<AnalyticsView> {
         ],
       ),
     );
+  }
+
+  Widget _buildWeeklyInsightsCard(WeeklyListeningInsights insights) {
+    return Card(
+      key: const Key('weekly_insights_card'),
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              'This week',
+              style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                color: ListeningPalette.text,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+            const SizedBox(height: 3),
+            Text(
+              '${_formatWeekDate(insights.weekStart)} – ${_formatWeekDate(insights.throughDate)} · local time',
+              style: Theme.of(context).textTheme.bodySmall
+                  ?.copyWith(color: ListeningPalette.muted),
+            ),
+            const SizedBox(height: 14),
+            LayoutBuilder(
+              builder: (context, constraints) {
+                final metrics = [
+                  _buildWeeklyMetric(
+                    'Listening time',
+                    insights.totalListeningFormatted,
+                    key: const Key('weekly_total_duration'),
+                  ),
+                  _buildWeeklyMetric(
+                    'Sessions',
+                    '${insights.totalSessionCount}',
+                    key: const Key('weekly_session_count'),
+                  ),
+                ];
+                if (constraints.maxWidth < 350) {
+                  return Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      metrics[0],
+                      const SizedBox(height: 12),
+                      metrics[1],
+                    ],
+                  );
+                }
+                return Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Expanded(child: metrics[0]),
+                    const SizedBox(width: 12),
+                    Expanded(child: metrics[1]),
+                  ],
+                );
+              },
+            ),
+            const SizedBox(height: 14),
+            const Divider(),
+            const SizedBox(height: 12),
+            Text(
+              'Sessions across the week',
+              style: Theme.of(context).textTheme.titleSmall
+                  ?.copyWith(fontWeight: FontWeight.w600),
+            ),
+            const SizedBox(height: 4),
+            Text(
+              'Bars show listening time · counts show sessions per day',
+              style: Theme.of(context).textTheme.bodySmall
+                  ?.copyWith(color: ListeningPalette.muted),
+            ),
+            const SizedBox(height: 12),
+            if (insights.hasSessions)
+              _buildWeeklyTrendChart(insights)
+            else
+              Container(
+                key: const Key('weekly_empty_state'),
+                width: double.infinity,
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 12,
+                  vertical: 18,
+                ),
+                decoration: BoxDecoration(
+                  color: ListeningPalette.surfaceRaised,
+                  borderRadius: BorderRadius.circular(14),
+                ),
+                child: Text(
+                  'No listening sessions this week yet.',
+                  textAlign: TextAlign.center,
+                  style: Theme.of(context).textTheme.bodyMedium
+                      ?.copyWith(color: ListeningPalette.muted),
+                ),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildWeeklyMetric(String label, String value, {Key? key}) {
+    return Column(
+      key: key,
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          label,
+          style: Theme.of(context).textTheme.bodySmall
+              ?.copyWith(color: ListeningPalette.muted),
+        ),
+        const SizedBox(height: 3),
+        Text(
+          value,
+          style: Theme.of(context).textTheme.headlineSmall?.copyWith(
+            color: ListeningPalette.mint,
+            fontWeight: FontWeight.w700,
+            fontFeatures: const [FontFeature.tabularFigures()],
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildWeeklyTrendChart(WeeklyListeningInsights insights) {
+    final maxListeningSeconds = insights.dailyTrends.fold<int>(
+      0,
+      (maxSeconds, point) => point.listeningSeconds > maxSeconds
+          ? point.listeningSeconds
+          : maxSeconds,
+    );
+    const weekdayLabels = ['M', 'T', 'W', 'T', 'F', 'S', 'S'];
+
+    return Row(
+      key: const Key('weekly_trend_chart'),
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        for (final point in insights.dailyTrends)
+          Expanded(
+            child: Semantics(
+              label:
+                  '${_formatWeekDate(point.date)}, ${point.sessionCount} sessions, ${point.listeningFormatted} listening',
+              child: ExcludeSemantics(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(
+                      '${point.sessionCount}',
+                      style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                        color: point.sessionCount > 0
+                            ? ListeningPalette.text
+                            : ListeningPalette.muted,
+                        fontFeatures: const [FontFeature.tabularFigures()],
+                      ),
+                    ),
+                    const SizedBox(height: 6),
+                    SizedBox(
+                      height: 52,
+                      child: Align(
+                        alignment: Alignment.bottomCenter,
+                        child: AnimatedContainer(
+                          key: Key(
+                            'weekly_trend_day_${point.date.year}-${point.date.month.toString().padLeft(2, '0')}-${point.date.day.toString().padLeft(2, '0')}',
+                          ),
+                          duration: const Duration(milliseconds: 240),
+                          width: 14,
+                          height: maxListeningSeconds == 0
+                              ? 4
+                              : (point.listeningSeconds /
+                                        maxListeningSeconds *
+                                        48)
+                                    .clamp(4.0, 48.0),
+                          decoration: BoxDecoration(
+                            color: point.listeningSeconds > 0
+                                ? ListeningPalette.mint
+                                : ListeningPalette.separator,
+                            borderRadius: BorderRadius.circular(99),
+                          ),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 6),
+                    Text(
+                      weekdayLabels[point.date.weekday - 1],
+                      style: Theme.of(context).textTheme.labelSmall
+                          ?.copyWith(color: ListeningPalette.muted),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+      ],
+    );
+  }
+
+  String _formatWeekDate(DateTime date) {
+    const months = [
+      'Jan',
+      'Feb',
+      'Mar',
+      'Apr',
+      'May',
+      'Jun',
+      'Jul',
+      'Aug',
+      'Sep',
+      'Oct',
+      'Nov',
+      'Dec',
+    ];
+    return '${months[date.month - 1]} ${date.day}';
   }
 
   Widget _buildPeriodSelector() {
@@ -260,9 +488,7 @@ class AnalyticsViewState extends State<AnalyticsView> {
               width: double.infinity,
               margin: const EdgeInsets.only(bottom: 8),
               padding: const EdgeInsets.symmetric(vertical: 14),
-              decoration: BoxDecoration(
-                color: Colors.transparent,
-              ),
+              decoration: BoxDecoration(color: Colors.transparent),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [

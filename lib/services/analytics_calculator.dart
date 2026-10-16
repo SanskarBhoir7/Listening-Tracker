@@ -4,6 +4,7 @@ import '../models/device_usage_stats.dart';
 import '../models/listening_session.dart';
 import '../models/period_comparison.dart';
 import '../models/period_stats.dart';
+import '../models/weekly_listening_insights.dart';
 
 /// Pure-Dart calculation service for listening analytics, metrics, trends, and comparisons.
 ///
@@ -25,18 +26,31 @@ class AnalyticsCalculator {
   /// Calculates average session duration in seconds.
   /// Zero-safe against zero or negative session counts.
   /// Uses mathematical rounding (.round()).
-  static int calculateAverageSessionSeconds(int totalListeningSeconds, int sessionCount) {
+  static int calculateAverageSessionSeconds(
+    int totalListeningSeconds,
+    int sessionCount,
+  ) {
     if (sessionCount <= 0 || totalListeningSeconds <= 0) return 0;
     return (totalListeningSeconds / sessionCount).round();
   }
 
   /// Calculates average session duration as a [Duration].
-  static Duration calculateAverageSessionDuration(int totalListeningSeconds, int sessionCount) {
-    return Duration(seconds: calculateAverageSessionSeconds(totalListeningSeconds, sessionCount));
+  static Duration calculateAverageSessionDuration(
+    int totalListeningSeconds,
+    int sessionCount,
+  ) {
+    return Duration(
+      seconds: calculateAverageSessionSeconds(
+        totalListeningSeconds,
+        sessionCount,
+      ),
+    );
   }
 
   /// Calculates average session seconds directly from a list of [ListeningSession].
-  static int averageSessionSecondsFromSessions(List<ListeningSession> sessions) {
+  static int averageSessionSecondsFromSessions(
+    List<ListeningSession> sessions,
+  ) {
     if (sessions.isEmpty) return 0;
     int totalListening = 0;
     for (final s in sessions) {
@@ -46,7 +60,9 @@ class AnalyticsCalculator {
   }
 
   /// Calculates average session duration as [Duration] from a list of [ListeningSession].
-  static Duration averageSessionDurationFromSessions(List<ListeningSession> sessions) {
+  static Duration averageSessionDurationFromSessions(
+    List<ListeningSession> sessions,
+  ) {
     return Duration(seconds: averageSessionSecondsFromSessions(sessions));
   }
 
@@ -60,7 +76,10 @@ class AnalyticsCalculator {
   /// - Clamped between 0.0 and 1.0 according to project convention.
   /// - Returns 0.0 if connection time <= 0.
   /// - Never produces NaN or Infinity.
-  static double calculateListeningRatio(int listeningSeconds, int connectedSeconds) {
+  static double calculateListeningRatio(
+    int listeningSeconds,
+    int connectedSeconds,
+  ) {
     if (connectedSeconds <= 0 || listeningSeconds <= 0) return 0.0;
     final ratio = listeningSeconds / connectedSeconds;
     if (!ratio.isFinite) return 0.0;
@@ -69,12 +88,18 @@ class AnalyticsCalculator {
 
   /// Calculates listening ratio from a [PeriodStats] instance.
   static double calculateListeningRatioFromStats(PeriodStats stats) {
-    return calculateListeningRatio(stats.totalListeningSeconds, stats.totalConnectedSeconds);
+    return calculateListeningRatio(
+      stats.totalListeningSeconds,
+      stats.totalConnectedSeconds,
+    );
   }
 
   /// Calculates listening ratio from a [DeviceUsageStats] instance.
   static double calculateDeviceListeningRatio(DeviceUsageStats stats) {
-    return calculateListeningRatio(stats.totalListeningSeconds, stats.totalConnectedSeconds);
+    return calculateListeningRatio(
+      stats.totalListeningSeconds,
+      stats.totalConnectedSeconds,
+    );
   }
 
   // =========================================================================
@@ -102,7 +127,8 @@ class AnalyticsCalculator {
     ListeningSession? longest;
     for (final s in sessions) {
       if (longest == null ||
-          s.activeListeningDurationSeconds > longest.activeListeningDurationSeconds) {
+          s.activeListeningDurationSeconds >
+              longest.activeListeningDurationSeconds) {
         longest = s;
       }
     }
@@ -118,13 +144,19 @@ class AnalyticsCalculator {
   /// 2. Tie-break: total connected duration DESC
   /// 3. Tie-break: session count DESC
   /// 4. Tie-break: deviceId ASC
-  static List<DeviceUsageStats> sortDeviceUsage(List<DeviceUsageStats> devices) {
+  static List<DeviceUsageStats> sortDeviceUsage(
+    List<DeviceUsageStats> devices,
+  ) {
     final list = List<DeviceUsageStats>.from(devices);
     list.sort((a, b) {
-      final cmpListening = b.totalListeningSeconds.compareTo(a.totalListeningSeconds);
+      final cmpListening = b.totalListeningSeconds.compareTo(
+        a.totalListeningSeconds,
+      );
       if (cmpListening != 0) return cmpListening;
 
-      final cmpConnected = b.totalConnectedSeconds.compareTo(a.totalConnectedSeconds);
+      final cmpConnected = b.totalConnectedSeconds.compareTo(
+        a.totalConnectedSeconds,
+      );
       if (cmpConnected != 0) return cmpConnected;
 
       final cmpCount = b.sessionCount.compareTo(a.sessionCount);
@@ -148,16 +180,21 @@ class AnalyticsCalculator {
 
   /// Checks whether a device is connection-only (connected duration > 0, 0 listening time).
   static bool isConnectionOnly(DeviceUsageStats device) {
-    return device.totalConnectedSeconds > 0 && device.totalListeningSeconds == 0;
+    return device.totalConnectedSeconds > 0 &&
+        device.totalListeningSeconds == 0;
   }
 
   /// Filters devices that only had connection time without any active listening.
-  static List<DeviceUsageStats> filterConnectionOnlyDevices(List<DeviceUsageStats> devices) {
+  static List<DeviceUsageStats> filterConnectionOnlyDevices(
+    List<DeviceUsageStats> devices,
+  ) {
     return devices.where(isConnectionOnly).toList();
   }
 
   /// Filters devices that had confirmed active listening time (> 0s).
-  static List<DeviceUsageStats> filterActiveListeningDevices(List<DeviceUsageStats> devices) {
+  static List<DeviceUsageStats> filterActiveListeningDevices(
+    List<DeviceUsageStats> devices,
+  ) {
     return devices.where((d) => d.totalListeningSeconds > 0).toList();
   }
 
@@ -172,7 +209,8 @@ class AnalyticsCalculator {
     for (final s in sessions) {
       final entry = map.putIfAbsent(
         s.deviceId,
-        () => _MutableDeviceUsage(deviceId: s.deviceId, deviceName: s.deviceName),
+        () =>
+            _MutableDeviceUsage(deviceId: s.deviceId, deviceName: s.deviceName),
       );
       entry.totalListeningSeconds += s.activeListeningDurationSeconds;
       entry.sessionCount += 1;
@@ -187,7 +225,8 @@ class AnalyticsCalculator {
     for (final r in connectionRecords) {
       final entry = map.putIfAbsent(
         r.deviceId,
-        () => _MutableDeviceUsage(deviceId: r.deviceId, deviceName: r.deviceName),
+        () =>
+            _MutableDeviceUsage(deviceId: r.deviceId, deviceName: r.deviceName),
       );
       entry.totalConnectedSeconds += r.durationSeconds;
       if (entry.deviceName.isEmpty && r.deviceName.isNotEmpty) {
@@ -202,6 +241,45 @@ class AnalyticsCalculator {
   // =========================================================================
   // 5. Daily Trend Data
   // =========================================================================
+
+  /// Returns the Monday at local midnight for the calendar week containing
+  /// [date]. The app stores timestamps as epoch values and displays them in
+  /// local time, so weekly grouping follows the device's local calendar.
+  static DateTime startOfLocalWeek(DateTime date) {
+    return DateTime(date.year, date.month, date.day - (date.weekday - 1));
+  }
+
+  /// Builds a current-week projection from persisted session snapshots.
+  /// Sessions are attributed to their local [ListeningSession.connectedAt]
+  /// date, matching [buildDailyTrends] and the repository's date-range query.
+  /// Active sessions contribute only their currently persisted listening
+  /// duration; this method does not extrapolate a live counter.
+  static WeeklyListeningInsights buildWeeklyListeningInsights({
+    required DateTime referenceDate,
+    required List<ListeningSession> sessions,
+  }) {
+    final weekStart = startOfLocalWeek(referenceDate);
+    final throughDate = DateTime(
+      referenceDate.year,
+      referenceDate.month,
+      referenceDate.day,
+    );
+    final inWeekSessions = sessions.where((session) {
+      return !session.connectedAt.isBefore(weekStart) &&
+          !session.connectedAt.isAfter(referenceDate);
+    }).toList();
+    final trends = buildDailyTrends(
+      startDate: weekStart,
+      endDate: throughDate,
+      sessions: inWeekSessions,
+    );
+
+    return WeeklyListeningInsights(
+      weekStart: weekStart,
+      throughDate: throughDate,
+      dailyTrends: List.unmodifiable(trends),
+    );
+  }
 
   /// Builds chronological daily trend points for every day within [startDate] and [endDate] (inclusive).
   ///
@@ -225,14 +303,22 @@ class AnalyticsCalculator {
     // Pre-index sessions by day
     final sessionsByDay = <DateTime, List<ListeningSession>>{};
     for (final s in sessions) {
-      final dayKey = DateTime(s.connectedAt.year, s.connectedAt.month, s.connectedAt.day);
+      final dayKey = DateTime(
+        s.connectedAt.year,
+        s.connectedAt.month,
+        s.connectedAt.day,
+      );
       sessionsByDay.putIfAbsent(dayKey, () => []).add(s);
     }
 
     // Pre-index connections by day
     final connectionsByDay = <DateTime, List<ConnectionRecord>>{};
     for (final c in connectionRecords) {
-      final dayKey = DateTime(c.connectedAt.year, c.connectedAt.month, c.connectedAt.day);
+      final dayKey = DateTime(
+        c.connectedAt.year,
+        c.connectedAt.month,
+        c.connectedAt.day,
+      );
       connectionsByDay.putIfAbsent(dayKey, () => []).add(c);
     }
 
@@ -252,15 +338,18 @@ class AnalyticsCalculator {
     var current = start;
 
     while (!current.isAfter(end)) {
-      if (normalizedDailyMap != null && normalizedDailyMap.containsKey(current)) {
+      if (normalizedDailyMap != null &&
+          normalizedDailyMap.containsKey(current)) {
         final stats = normalizedDailyMap[current]!;
-        points.add(DailyTrendPoint(
-          date: current,
-          listeningSeconds: stats.totalListeningSeconds,
-          connectedSeconds: stats.totalConnectedSeconds,
-          silentSeconds: stats.totalSilentSeconds,
-          sessionCount: stats.sessionCount,
-        ));
+        points.add(
+          DailyTrendPoint(
+            date: current,
+            listeningSeconds: stats.totalListeningSeconds,
+            connectedSeconds: stats.totalConnectedSeconds,
+            silentSeconds: stats.totalSilentSeconds,
+            sessionCount: stats.sessionCount,
+          ),
+        );
       } else {
         final daySessions = sessionsByDay[current] ?? const [];
         final dayConnections = connectionsByDay[current] ?? const [];
@@ -277,13 +366,15 @@ class AnalyticsCalculator {
           totalConnected += c.durationSeconds;
         }
 
-        points.add(DailyTrendPoint(
-          date: current,
-          listeningSeconds: totalListening,
-          connectedSeconds: totalConnected,
-          silentSeconds: totalSilent,
-          sessionCount: daySessions.length,
-        ));
+        points.add(
+          DailyTrendPoint(
+            date: current,
+            listeningSeconds: totalListening,
+            connectedSeconds: totalConnected,
+            silentSeconds: totalSilent,
+            sessionCount: daySessions.length,
+          ),
+        );
       }
 
       current = DateTime(current.year, current.month, current.day + 1);
@@ -297,7 +388,10 @@ class AnalyticsCalculator {
   // =========================================================================
 
   /// Compares metrics between two periods (current vs previous).
-  static PeriodComparison comparePeriods(PeriodStats current, PeriodStats previous) {
+  static PeriodComparison comparePeriods(
+    PeriodStats current,
+    PeriodStats previous,
+  ) {
     return PeriodComparison(current: current, previous: previous);
   }
 }
@@ -313,10 +407,7 @@ class _MutableDeviceUsage {
   int sessionCount = 0;
   int longestSessionSeconds = 0;
 
-  _MutableDeviceUsage({
-    required this.deviceId,
-    required this.deviceName,
-  });
+  _MutableDeviceUsage({required this.deviceId, required this.deviceName});
 
   DeviceUsageStats toStats() {
     return DeviceUsageStats(
