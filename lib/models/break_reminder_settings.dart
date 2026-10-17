@@ -10,7 +10,7 @@ class BreakReminderSettings {
   final int intervalMinutes;
 
   /// Duration (in minutes) to snooze when the user snoozes a reminder.
-  /// Allowed choices: 5, 10, or 15 minutes. Default: 10 minutes.
+  /// Allowed choices: 5, 10, 15, 30, or 60 minutes. Default: 10 minutes.
   final int snoozeMinutes;
 
   const BreakReminderSettings({
@@ -25,13 +25,13 @@ class BreakReminderSettings {
   static const int maxIntervalMinutes = 120;
 
   static const List<int> quickIntervals = [30, 45, 60];
-  static const List<int> snoozeChoices = [5, 10, 15];
+  static const List<int> snoozeChoices = [5, 10, 15, 30, 60];
 
   /// Validates whether a custom interval is within the supported bounds (15-120 minutes).
   static bool isValidInterval(int minutes) =>
       minutes >= minIntervalMinutes && minutes <= maxIntervalMinutes;
 
-  /// Validates whether a snooze choice is supported (5, 10, or 15 minutes).
+  /// Validates whether a snooze choice is supported.
   static bool isValidSnooze(int minutes) => snoozeChoices.contains(minutes);
 
   /// Converts user settings into the deterministic [BreakRuleConfig] used by [BreakEngine].

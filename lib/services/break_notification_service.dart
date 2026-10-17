@@ -8,6 +8,7 @@ abstract class BreakNotificationService {
     required String title,
     required String body,
     int snoozeMinutes = 10,
+    required String sessionGeneration,
   });
 
   /// Cancels an active break notification by its unique ID.
@@ -40,6 +41,7 @@ class NativeBreakNotificationService implements BreakNotificationService {
     required String title,
     required String body,
     int snoozeMinutes = 10,
+    required String sessionGeneration,
   }) async {
     try {
       return await _audioService.showBreakNotification(
@@ -47,6 +49,7 @@ class NativeBreakNotificationService implements BreakNotificationService {
         title: title,
         body: body,
         snoozeMinutes: snoozeMinutes,
+        sessionGeneration: sessionGeneration,
       );
     } catch (_) {
       return false;
@@ -106,6 +109,7 @@ class FakeBreakNotificationService implements BreakNotificationService {
     required String title,
     required String body,
     int snoozeMinutes = 10,
+    required String sessionGeneration,
   }) async {
     if (!permissionGranted) return false;
     shownNotifications.add({
@@ -113,6 +117,7 @@ class FakeBreakNotificationService implements BreakNotificationService {
       'title': title,
       'body': body,
       'snoozeMinutes': snoozeMinutes,
+      'sessionGeneration': sessionGeneration,
       'timestamp': DateTime.now().millisecondsSinceEpoch,
     });
     return true;

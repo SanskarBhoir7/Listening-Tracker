@@ -12,6 +12,7 @@ class BreakActionReceiverTest {
         assertEquals("com.listeningtracker.action.BREAK_DISMISS", BreakActionReceiver.ACTION_DISMISS)
         assertEquals("notification_id", BreakActionReceiver.EXTRA_NOTIFICATION_ID)
         assertEquals("snooze_minutes", BreakActionReceiver.EXTRA_SNOOZE_MINUTES)
+        assertEquals("session_generation", BreakActionReceiver.EXTRA_SESSION_GENERATION)
     }
 
     @Test

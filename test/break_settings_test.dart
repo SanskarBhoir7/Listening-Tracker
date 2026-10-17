@@ -40,10 +40,13 @@ void main() {
       expect(BreakReminderSettings.isValidInterval(121), isFalse);
     });
 
-    test('Validates snooze choices (5, 10, 15 minutes)', () {
+    test('Validates snooze choices and preserves the 10-minute default', () {
+      expect(BreakReminderSettings.snoozeChoices, [5, 10, 15, 30, 60]);
       expect(BreakReminderSettings.isValidSnooze(5), isTrue);
       expect(BreakReminderSettings.isValidSnooze(10), isTrue);
       expect(BreakReminderSettings.isValidSnooze(15), isTrue);
+      expect(BreakReminderSettings.isValidSnooze(30), isTrue);
+      expect(BreakReminderSettings.isValidSnooze(60), isTrue);
       expect(BreakReminderSettings.isValidSnooze(20), isFalse);
       expect(BreakReminderSettings.isValidSnooze(0), isFalse);
     });
@@ -270,6 +273,42 @@ void main() {
       },
     );
 
+    for (final snoozeMinutes in [30, 60]) {
+      test('$snoozeMinutes-minute snooze uses active listening time across pause', () async {
+        await breakEngine.update(
+          continuousListeningDuration: const Duration(minutes: 45),
+          isAudioPlaying: true,
+          isInGracePeriod: false,
+          activeDevice: testDevice,
+        );
+        await breakEngine.snooze(Duration(minutes: snoozeMinutes));
+
+        await breakEngine.update(
+          continuousListeningDuration: const Duration(minutes: 45),
+          isAudioPlaying: false,
+          isInGracePeriod: true,
+          activeDevice: testDevice,
+        );
+        expect(breakEngine.snoozeRemaining, Duration(minutes: snoozeMinutes));
+
+        await breakEngine.update(
+          continuousListeningDuration: Duration(minutes: 45 + snoozeMinutes - 1),
+          isAudioPlaying: true,
+          isInGracePeriod: false,
+          activeDevice: testDevice,
+        );
+        expect(breakEngine.snoozeRemaining, const Duration(minutes: 1));
+
+        await breakEngine.update(
+          continuousListeningDuration: Duration(minutes: 45 + snoozeMinutes),
+          isAudioPlaying: true,
+          isInGracePeriod: false,
+          activeDevice: testDevice,
+        );
+        expect(breakEngine.isSnoozed, isFalse);
+      });
+    }
+
     test('Dismiss cancels notification and prevents re-triggering for current status', () async {
       // Reach threshold at 45m
       await breakEngine.update(
@@ -358,6 +397,30 @@ void main() {
       sessionEngine.dispose();
     });
 
+    Future<String> startSessionAtReminderThreshold() async {
+      await sessionEngine.handleNativeEvent({
+        'type': 'DEVICE_CONNECTED',
+        'deviceName': 'Sony WH-1000XM5',
+        'connectionType': 'bluetooth',
+        'address': '00:11:22:33:44:55',
+        'timestamp': baseTime.millisecondsSinceEpoch,
+      });
+      await sessionEngine.handleNativeEvent({
+        'type': 'AUDIO_STARTED',
+        'deviceName': 'Sony WH-1000XM5',
+        'connectionType': 'bluetooth',
+        'address': '00:11:22:33:44:55',
+        'timestamp': baseTime.millisecondsSinceEpoch,
+      });
+      sessionEngine.triggerTickForTesting(baseTime);
+      for (var second = 1; second <= 4; second++) {
+        sessionEngine.triggerTickForTesting(
+          baseTime.add(Duration(seconds: second)),
+        );
+      }
+      return sessionEngine.reminderGenerationForTesting!;
+    }
+
     test(
       'Handles native BREAK_ACTION snooze event from NotificationManager',
       () async {
@@ -394,6 +457,7 @@ void main() {
           'action': 'snooze',
           'id': 3001,
           'snoozeMinutes': 5,
+          'sessionGeneration': notificationService.shownNotifications.single['sessionGeneration'],
           'timestamp': baseTime
               .add(const Duration(seconds: 4))
               .millisecondsSinceEpoch,
@@ -436,6 +500,7 @@ void main() {
           'type': 'BREAK_ACTION',
           'action': 'dismiss',
           'id': 3001,
+          'sessionGeneration': notificationService.shownNotifications.single['sessionGeneration'],
           'timestamp': baseTime
               .add(const Duration(seconds: 4))
               .millisecondsSinceEpoch,
@@ -445,6 +510,44 @@ void main() {
         expect(notificationService.shownNotifications, isEmpty);
       },
     );
+
+    test('Ignores an action from an older continuous session', () async {
+      final oldGeneration = await startSessionAtReminderThreshold();
+      await sessionEngine.stopMonitoring();
+      sessionEngine.startMonitoring();
+      baseTime = baseTime.add(const Duration(seconds: 10));
+      final currentGeneration = await startSessionAtReminderThreshold();
+
+      expect(currentGeneration, isNot(oldGeneration));
+      await sessionEngine.handleNativeEvent({
+        'type': 'BREAK_ACTION',
+        'action': 'dismiss',
+        'id': 3001,
+        'sessionGeneration': oldGeneration,
+      });
+      expect(sessionEngine.breakState.isDismissed, isFalse);
+      expect(notificationService.shownNotifications, hasLength(1));
+    });
+
+    test('Ignores mismatched threshold IDs and missing or invalid generations', () async {
+      final generation = await startSessionAtReminderThreshold();
+      for (final token in <Object?>[null, '', 42, 'another-session']) {
+        await sessionEngine.handleNativeEvent({
+          'type': 'BREAK_ACTION',
+          'action': 'dismiss',
+          'id': 3001,
+          'sessionGeneration': token,
+        });
+      }
+      await sessionEngine.handleNativeEvent({
+        'type': 'BREAK_ACTION',
+        'action': 'dismiss',
+        'id': 3002,
+        'sessionGeneration': generation,
+      });
+      expect(sessionEngine.breakState.isDismissed, isFalse);
+      expect(notificationService.shownNotifications, hasLength(1));
+    });
 
     test('updateBreakReminderSettings persists and updates SessionEngine dynamically', () async {
       const newSettings = BreakReminderSettings(
@@ -532,6 +635,8 @@ void main() {
       expect(find.byKey(const Key('snooze_chip_5')), findsOneWidget);
       expect(find.byKey(const Key('snooze_chip_10')), findsOneWidget);
       expect(find.byKey(const Key('snooze_chip_15')), findsOneWidget);
+      expect(find.byKey(const Key('snooze_chip_30')), findsOneWidget);
+      expect(find.byKey(const Key('snooze_chip_60')), findsOneWidget);
     });
 
     testWidgets(

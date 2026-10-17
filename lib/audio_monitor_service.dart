@@ -180,6 +180,7 @@ class AudioMonitorService {
     required String title,
     required String body,
     int snoozeMinutes = 10,
+    required String sessionGeneration,
   }) async {
     try {
       final result = await _methodChannel.invokeMethod<bool>(
@@ -189,6 +190,7 @@ class AudioMonitorService {
           'title': title,
           'body': body,
           'snoozeMinutes': snoozeMinutes,
+          'sessionGeneration': sessionGeneration,
         },
       );
       return result ?? false;

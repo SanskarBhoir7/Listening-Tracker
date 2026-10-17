@@ -109,6 +109,7 @@ class FakeAudioMonitorService implements AudioMonitorService {
     required String title,
     required String body,
     int snoozeMinutes = 10,
+    required String sessionGeneration,
   }) async => true;
 
   @override

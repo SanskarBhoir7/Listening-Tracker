@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:math' as math;
 
 import 'package:flutter/foundation.dart';
 
@@ -24,6 +25,14 @@ import 'tracking_state.dart';
 /// 5. Break Engine tracking actual continuous listening and smart reminders
 /// 6. Database persistence via injectable DatabaseAdapter
 class SessionEngine {
+  static int _nextReminderGeneration = 0;
+  static final String _reminderGenerationPrefix = _createGenerationPrefix();
+
+  static String _createGenerationPrefix() {
+    final random = math.Random.secure();
+    return '${random.nextInt(1 << 32)}-${random.nextInt(1 << 32)}';
+  }
+
   static const Duration defaultGracePeriod = Duration(minutes: 3);
 
   final DatabaseAdapter _db;
@@ -57,6 +66,7 @@ class SessionEngine {
   // Active Sessions in progress
   ListeningSession? _currentDeviceSession;
   ContinuousListeningSession? _currentContinuousSession;
+  String? _activeReminderGeneration;
 
   // Wall-Clock Playback & Silent Segment Tracking
   DateTime? _currentAudioSegmentStartedAt;
@@ -94,6 +104,10 @@ class SessionEngine {
   ListeningSession? get currentDeviceSession => _currentDeviceSession;
   ContinuousListeningSession? get currentContinuousSession =>
       _currentContinuousSession;
+
+  @visibleForTesting
+  String? get reminderGenerationForTesting =>
+      _currentContinuousSession == null ? null : _activeReminderGeneration;
 
   bool get isInGracePeriod =>
       _sessionState == ListeningSessionState.gracePeriod;
@@ -741,16 +755,32 @@ class SessionEngine {
         break;
 
       case 'BREAK_ACTION':
-        final action = event['action'] as String?;
-        final notificationId = event['id'] as int?;
-        final snoozeMinutes = event['snoozeMinutes'] as int?;
+        final action = event['action'];
+        final notificationId = event['id'];
+        final generation = event['sessionGeneration'];
+        final snoozeMinutes = event['snoozeMinutes'];
+        if (_currentContinuousSession == null ||
+            generation is! String ||
+            generation.isEmpty ||
+            generation != _activeReminderGeneration ||
+            !_breakEngine.isCurrentNotificationAction(
+              sessionGeneration: generation,
+              notificationId: notificationId,
+            )) {
+          break;
+        }
         if (action == 'snooze') {
-          final dur = snoozeMinutes != null
+          if (snoozeMinutes != null &&
+              (snoozeMinutes is! int ||
+                  !BreakReminderSettings.isValidSnooze(snoozeMinutes))) {
+            break;
+          }
+          final duration = snoozeMinutes is int
               ? Duration(minutes: snoozeMinutes)
               : null;
-          await _breakEngine.snooze(dur);
+          await _breakEngine.snooze(duration);
         } else if (action == 'dismiss') {
-          await _breakEngine.dismiss(notificationId);
+          await _breakEngine.dismiss(notificationId as int);
         }
         break;
     }
@@ -832,6 +862,8 @@ class SessionEngine {
 
     // Handle Continuous Listening Session
     if (_currentContinuousSession == null) {
+      _activeReminderGeneration =
+          'reminder-session-$_reminderGenerationPrefix-${++_nextReminderGeneration}';
       _currentContinuousSession = ContinuousListeningSession(
         id: 'cs_${DateTime.now().microsecondsSinceEpoch}',
         startedAt: now,
@@ -1103,6 +1135,9 @@ class SessionEngine {
       isAudioPlaying: _sessionState == ListeningSessionState.active,
       isInGracePeriod: _sessionState == ListeningSessionState.gracePeriod,
       activeDevice: _activeOutputDevice,
+      sessionGeneration: _currentContinuousSession == null
+          ? null
+          : _activeReminderGeneration,
     );
   }
 

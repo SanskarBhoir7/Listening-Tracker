@@ -21,6 +21,9 @@ import 'diagnostic_logger.dart';
 ///    all break notifications are cancelled, and continuous duration resets to zero.
 /// 4. Duplicate notifications are strictly suppressed during the same continuous period.
 class BreakEngine {
+  static int _nextLocalGeneration = 0;
+
+  String? _sessionGeneration;
   BreakRuleConfig _config;
   BreakRuleConfig get config => _config;
 
@@ -195,6 +198,28 @@ class BreakEngine {
     );
   }
 
+  /// Validates a native notification action against its session and threshold.
+  bool isCurrentNotificationAction({
+    required Object? sessionGeneration,
+    required Object? notificationId,
+  }) {
+    if (sessionGeneration is! String ||
+        sessionGeneration.isEmpty ||
+        sessionGeneration != _sessionGeneration ||
+        notificationId is! int) {
+      return false;
+    }
+    final int? expectedId;
+    if (_state.status == BreakStatus.breakSoon) {
+      expectedId = NativeBreakNotificationService.breakSoonNotificationId;
+    } else if (_state.status == BreakStatus.breakRecommended) {
+      expectedId = NativeBreakNotificationService.breakRecommendedNotificationId;
+    } else {
+      expectedId = null;
+    }
+    return notificationId == expectedId;
+  }
+
   /// Updates the engine state from the current session metrics.
   /// Called on every timer tick and state transition.
   Future<void> update({
@@ -202,7 +227,13 @@ class BreakEngine {
     required bool isAudioPlaying,
     required bool isInGracePeriod,
     AudioDevice? activeDevice,
+    String? sessionGeneration,
   }) async {
+    if (sessionGeneration != null) {
+      _sessionGeneration = sessionGeneration;
+    } else {
+      _sessionGeneration ??= 'break-engine-${++_nextLocalGeneration}';
+    }
     _lastActualListeningDuration = continuousListeningDuration;
     final isSimulated = kDebugMode && _debugSimulatedOffset > Duration.zero;
     final effectiveDuration = isSimulated
@@ -390,6 +421,7 @@ class BreakEngine {
         title: title,
         body: body,
         snoozeMinutes: _config.snoozeDuration.inMinutes,
+        sessionGeneration: _sessionGeneration!,
       );
     } else if (_state.status == BreakStatus.breakRecommended &&
         !_notifiedBreakRecommended) {
@@ -417,6 +449,7 @@ class BreakEngine {
         title: title,
         body: body,
         snoozeMinutes: _config.snoozeDuration.inMinutes,
+        sessionGeneration: _sessionGeneration!,
       );
     }
   }
@@ -430,6 +463,7 @@ class BreakEngine {
     _dismissedStatuses.clear();
     _debugSimulatedOffset = Duration.zero;
     _lastActualListeningDuration = Duration.zero;
+    _sessionGeneration = null;
     _state = BreakState.initial(_config);
     try {
       await notificationService.cancelAllBreakNotifications();

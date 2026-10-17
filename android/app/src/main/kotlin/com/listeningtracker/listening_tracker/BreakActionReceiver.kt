@@ -18,21 +18,23 @@ class BreakActionReceiver : BroadcastReceiver() {
 
         const val EXTRA_NOTIFICATION_ID = "notification_id"
         const val EXTRA_SNOOZE_MINUTES = "snooze_minutes"
+        const val EXTRA_SESSION_GENERATION = "session_generation"
     }
 
     override fun onReceive(context: Context, intent: Intent?) {
         val action = intent?.action ?: return
-        val id = intent.getIntExtra(EXTRA_NOTIFICATION_ID, AudioMonitorBridge.BREAK_SOON_NOTIFICATION_ID)
+        val id = intent.extras?.get(EXTRA_NOTIFICATION_ID) as? Int ?: -1
         val snoozeMinutes = intent.getIntExtra(EXTRA_SNOOZE_MINUTES, 10)
+        val sessionGeneration = intent.extras?.get(EXTRA_SESSION_GENERATION) as? String
 
         Log.d(TAG, "onReceive action=$action, id=$id, snoozeMinutes=$snoozeMinutes")
 
         when (action) {
             ACTION_SNOOZE -> {
-                AudioMonitorBridge.handleBreakAction(context, "snooze", id, snoozeMinutes)
+                AudioMonitorBridge.handleBreakAction(context, "snooze", id, snoozeMinutes, sessionGeneration)
             }
             ACTION_DISMISS -> {
-                AudioMonitorBridge.handleBreakAction(context, "dismiss", id, snoozeMinutes)
+                AudioMonitorBridge.handleBreakAction(context, "dismiss", id, snoozeMinutes, sessionGeneration)
             }
             else -> {
                 Log.w(TAG, "Unhandled action: $action")

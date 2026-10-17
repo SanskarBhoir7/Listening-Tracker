@@ -42,6 +42,7 @@ object AudioMonitorBridge {
     const val EVENT_CHANNEL = "com.listeningtracker/audio_events"
     private const val ALERT_NOTIFICATION_ID = 2002
     private const val ALERT_CHANNEL_ID = "listening_tracker_alerts"
+    private val breakNotificationCoordinator = BreakNotificationCoordinator()
 
     private val mainHandler = Handler(Looper.getMainLooper())
 
@@ -191,7 +192,10 @@ object AudioMonitorBridge {
                         val title = call.argument<String>("title") ?: "Listening Break Reminder"
                         val body = call.argument<String>("body") ?: "Time to give your ears a rest."
                         val snoozeMinutes = call.argument<Int>("snoozeMinutes") ?: 10
-                        val success = showBreakNotification(ctx, id, title, body, snoozeMinutes)
+                        val sessionGeneration = call.argument<String>("sessionGeneration")
+                        val success = sessionGeneration?.takeIf { it.isNotBlank() }?.let {
+                            showBreakNotification(ctx, id, title, body, snoozeMinutes, it)
+                        } ?: false
                         result.success(success)
                     }
                     "cancelBreakNotification" -> {
@@ -582,7 +586,7 @@ object AudioMonitorBridge {
         }
     }
 
-    fun showBreakNotification(context: Context, id: Int, title: String, body: String, snoozeMinutes: Int = 10): Boolean {
+    fun showBreakNotification(context: Context, id: Int, title: String, body: String, snoozeMinutes: Int = 10, sessionGeneration: String): Boolean {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             val hasPermission = ContextCompat.checkSelfPermission(
                 context,
@@ -615,6 +619,8 @@ object AudioMonitorBridge {
             action = BreakActionReceiver.ACTION_SNOOZE
             putExtra(BreakActionReceiver.EXTRA_NOTIFICATION_ID, id)
             putExtra(BreakActionReceiver.EXTRA_SNOOZE_MINUTES, snoozeMinutes)
+            putExtra(BreakActionReceiver.EXTRA_SESSION_GENERATION, sessionGeneration)
+            data = Uri.parse("soundspan://break/$id/$sessionGeneration/snooze")
         }
         val snoozePendingIntent = PendingIntent.getBroadcast(
             context,
@@ -627,6 +633,8 @@ object AudioMonitorBridge {
         val dismissIntent = Intent(context, BreakActionReceiver::class.java).apply {
             action = BreakActionReceiver.ACTION_DISMISS
             putExtra(BreakActionReceiver.EXTRA_NOTIFICATION_ID, id)
+            putExtra(BreakActionReceiver.EXTRA_SESSION_GENERATION, sessionGeneration)
+            data = Uri.parse("soundspan://break/$id/$sessionGeneration/dismiss")
         }
         val dismissPendingIntent = PendingIntent.getBroadcast(
             context,
@@ -658,23 +666,37 @@ object AudioMonitorBridge {
             .build()
 
         val notificationManager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-        notificationManager.notify(id, notification)
+        breakNotificationCoordinator.post(id, sessionGeneration) {
+            notificationManager.notify(id, notification)
+        }
 
         NativeLifecycleDiagnostics.record(context, "BREAK_NOTIFICATION_POSTED", mapOf(
             "id" to id,
             "title" to title,
             "body" to body,
-            "snoozeMinutes" to snoozeMinutes
+            "snoozeMinutes" to snoozeMinutes,
+            "sessionGeneration" to sessionGeneration
         ))
         return true
     }
 
-    fun handleBreakAction(context: Context, action: String, id: Int, snoozeMinutes: Int = 10) {
-        cancelBreakNotification(context, id)
+    fun handleBreakAction(context: Context, action: String, id: Int, snoozeMinutes: Int = 10, sessionGeneration: String?) {
+        val shouldCancel = try {
+            val manager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+            breakNotificationCoordinator.cancelForAction(id, sessionGeneration) {
+                manager.cancel(id)
+            }
+        } catch (_: Exception) {
+            false
+        }
+        if (shouldCancel) {
+            NativeLifecycleDiagnostics.record(context, "BREAK_NOTIFICATION_CANCELLED", mapOf("id" to id))
+        }
         NativeLifecycleDiagnostics.record(context, "BREAK_NOTIFICATION_ACTION_CLICKED", mapOf(
             "action" to action,
             "id" to id,
-            "snoozeMinutes" to snoozeMinutes
+            "snoozeMinutes" to snoozeMinutes,
+            "sessionGeneration" to sessionGeneration
         ))
 
         val payload = mapOf(
@@ -682,6 +704,7 @@ object AudioMonitorBridge {
             "action" to action,
             "id" to id,
             "snoozeMinutes" to snoozeMinutes,
+            "sessionGeneration" to sessionGeneration,
             "timestamp" to System.currentTimeMillis()
         )
 
@@ -701,7 +724,9 @@ object AudioMonitorBridge {
     fun cancelBreakNotification(context: Context, id: Int) {
         try {
             val notificationManager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-            notificationManager.cancel(id)
+            breakNotificationCoordinator.cancel(id) {
+                notificationManager.cancel(id)
+            }
             NativeLifecycleDiagnostics.record(context, "BREAK_NOTIFICATION_CANCELLED", mapOf("id" to id))
         } catch (_: Exception) {}
     }
